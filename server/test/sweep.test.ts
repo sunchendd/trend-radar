@@ -156,24 +156,26 @@ describe('巡检执行', () => {
   });
 
   it('单个巡检项失败不中断整轮（登录掉了的常见情形）', async () => {
-    const ok = addWatch(db, { query: '方向 A B C' });
-    addWatch(db, { query: '方向 D E F' });
+    const failing = addWatch(db, { query: '方向 A B C' });
+    const working = addWatch(db, { query: '方向 D E F' });
 
-    let call = 0;
-    const flakyRunner = async () => {
-      call += 1;
-      if (call === 1) throw new Error('登录未完成');
+    // 按检索式决定失败，而不是按调用次序：listWatches 的排序在 created_at 相同时不保证稳定，
+    // 之前按 call===1 写会导致行为依赖提交顺序（CI 上就翻车了）。
+    const flakyRunner = async (_cmd: string, args: string[]) => {
+      const query = args.join(' ');
+      if (query.includes('方向 A B C')) throw new Error('登录未完成');
       return { stdout: JSON.stringify([{ q: '方向 D E F', count: 3, apps: [], pats: [] }]), stderr: '', code: 0 };
     };
 
     const res = await sweepWatches(config, db, { runCommand: flakyRunner });
     expect(res.checked).toBe(1);
     expect(res.skipped).toBe(1);
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0]?.watchId).toBe(failing.id);
     expect(res.errors[0]?.message).toContain('登录未完成');
-    // 成功的那条仍然落库
-    const all = listWatches(db, true);
-    const checked = all.find((item) => item.id !== ok.id);
-    expect(history(db, checked?.id ?? '').map((row) => row.hits)).toEqual([3]);
+    // 失败的方向不写快照，成功的方向照常落库
+    expect(history(db, failing.id)).toHaveLength(0);
+    expect(history(db, working.id).map((row) => row.hits)).toEqual([3]);
   });
 
   it('没有巡检项时直接返回空结果，不启动任何外部调用', async () => {
