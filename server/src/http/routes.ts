@@ -219,6 +219,17 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
 
   app.get('/api/sources', async () => deps.listSources());
 
+  const watchesQuerySchema = z.object({
+    all: z.enum(['true', 'false']).optional(),
+  });
+
+  const watchBodySchema = z.object({
+    query: z.string().trim().min(4, '检索式至少 4 个字符').max(80),
+    note: z.string().trim().max(200).optional(),
+  });
+
+  const watchPatchSchema = z.object({ enabled: z.boolean() });
+
   // 手工创建选题：LLM 不可用时用户仍能把想法结构化进工作台（与生成结果同一张表、同一套判读）
   const manualIdeaSchema = z.object({
     title: z.string().trim().min(6).max(200),
@@ -298,6 +309,35 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
       )
       .send(markdown);
   });
+
+  // ---- 检索式巡检：盯住方向，命中数异动就是选题触发器 ----
+  app.get('/api/watches', async (req) => {
+    const { all } = parse(watchesQuerySchema, req.query);
+    return deps.listWatches(all === 'true');
+  });
+
+  app.post('/api/watches', async (req, reply) => {
+    const body = parse(watchBodySchema, req.body ?? {});
+    const watch = deps.addWatch(body);
+    return reply.code(201).send(watch);
+  });
+
+  app.delete('/api/watches/:id', async (req) => {
+    const { id } = parse(idParams, req.params);
+    if (!deps.removeWatch(id)) throw notFound(`巡检项 ${id} 不存在`);
+    return { ok: true };
+  });
+
+  app.patch('/api/watches/:id', async (req) => {
+    const { id } = parse(idParams, req.params);
+    const { enabled } = parse(watchPatchSchema, req.body ?? {});
+    if (!deps.setWatchEnabled(id, enabled)) throw notFound(`巡检项 ${id} 不存在`);
+    const watch = deps.listWatches(true).find((item) => item.id === id);
+    return watch ?? { ok: true };
+  });
+
+  // 同步跑一轮巡检：会调外部查新 CLI，正常 20–60s；单方向失败不影响其余
+  app.post('/api/watches/sweep', async () => deps.sweepWatches());
 
   app.get('/api/runs', async () => deps.listRuns(RUNS_PAGE));
 

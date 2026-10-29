@@ -190,3 +190,42 @@ export interface GenerateIdeasRequest {
 export interface ApiError {
   error: { code: string; message: string; detail?: unknown };
 }
+
+
+/** 巡检项（与 server/src/store/watches.ts 的 Watch 对齐） */
+export interface Watch {
+  id: string;
+  query: string;
+  note: string;
+  enabled: boolean;
+  createdAt: string;
+  lastHits: number | null;
+  lastCheckedAt: string | null;
+  checks: number;
+}
+
+export type TrendLevel = 'surge' | 'warm' | 'flat' | 'cool' | 'new-front' | 'baseline';
+
+export interface TrendOutcome {
+  level: TrendLevel;
+  headline: string;
+  deltaPct: number | null;
+  latest: number | null;
+  previous: number | null;
+  actionable: boolean;
+}
+
+export interface WatchTrend {
+  watch: Watch;
+  trend: TrendOutcome;
+  history: { at: string; hits: number | null }[];
+}
+
+export interface SweepResult {
+  at: string;
+  checked: number;
+  skipped: number;
+  alerts: WatchTrend[];
+  trends: WatchTrend[];
+  errors: { watchId: string; query: string; message: string }[];
+}

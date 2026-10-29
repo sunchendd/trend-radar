@@ -17,6 +17,8 @@ import type {
   RunRecord,
   Source,
   Stats,
+  SweepResult,
+  Watch,
 } from './types';
 import * as mock from './mock';
 
@@ -385,6 +387,29 @@ export function generateIdeas(
     timeout: 90_000,
     fallback: () => mock.mockGenerateIdeas(req.focus, req.count),
   });
+}
+
+export function listWatches(all = false): Promise<Watch[]> {
+  return request(`/api/watches${all ? '?all=true' : ''}`, { fallback: () => [] });
+}
+
+export function addWatch(query: string, note?: string): Promise<Watch> {
+  return request('/api/watches', { method: 'POST', body: { query, ...(note ? { note } : {}) } });
+}
+
+export function removeWatch(id: string): Promise<void> {
+  return request(`/api/watches/${encodeURIComponent(id)}`, { method: 'DELETE', fallback: () => undefined });
+}
+
+export function setWatchEnabled(id: string, enabled: boolean): Promise<Watch> {
+  return request(`/api/watches/${encodeURIComponent(id)}`, { method: 'PATCH', body: { enabled } });
+}
+
+/** 跑一轮巡检：会真调智慧芽，通常 20–60 秒 */
+export function runSweep(): Promise<SweepResult> {
+  return request('/api/watches/sweep', { method: 'POST', timeout: 180_000, fallback: () => {
+    throw new Error('演示模式下不会真的跑巡检');
+  } });
 }
 
 export interface ManualIdeaPayload {

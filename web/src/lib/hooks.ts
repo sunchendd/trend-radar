@@ -39,14 +39,14 @@ export function useDemoMode(): boolean {
 
 // ------------------------------------------------------------------ 路由（hash）
 
-export type RouteName = 'feed' | 'ideas' | 'system';
+export type RouteName = 'feed' | 'ideas' | 'watch' | 'system';
 
 export interface Route {
   name: RouteName;
   params: URLSearchParams;
 }
 
-const ROUTE_NAMES: RouteName[] = ['feed', 'ideas', 'system'];
+const ROUTE_NAMES: RouteName[] = ['feed', 'ideas', 'watch', 'system'];
 
 function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, '');

@@ -10,12 +10,14 @@ import type { RouteName } from '../lib/hooks';
 const NAV: { name: RouteName; label: string; icon: IconName; hint: string }[] = [
   { name: 'feed', label: '情报流', icon: 'feed', hint: '今天哪些情报值得读' },
   { name: 'ideas', label: '选题', icon: 'bulb', hint: '把情报变成可查新的专利选题' },
+  { name: 'watch', label: '巡检', icon: 'flame', hint: '盯住方向，命中数异动就是选题信号' },
   { name: 'system', label: '信源', icon: 'antenna', hint: '信源启停与采集日志' },
 ];
 
 export const PAGE_TITLE: Record<RouteName, { title: string; sub: string }> = {
   feed: { title: '情报流', sub: '按相关度排序的技术信号' },
   ideas: { title: '选题工作台', sub: '查新、判读、交底书素材' },
+  watch: { title: '检索式巡检', sub: '命中数环比异动 → 选题触发器' },
   system: { title: '信源与日志', sub: '抓取健康度与运行记录' },
 };
 

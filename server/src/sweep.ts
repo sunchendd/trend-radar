@@ -51,6 +51,9 @@ export async function sweepWatches(
 
   const result: SweepResult = { at: now().toISOString(), checked: 0, skipped: 0, alerts: [], trends: [], errors: [] };
   if (targets.length === 0) return result;
+  // 保留原始错误对象：上层要靠类型（NoveltyNotConfiguredError → 503）做映射，
+  // 只留 message 会退化成 500，前端提示也跟着变模糊
+  const failures: unknown[] = [];
 
   // 一条检索式一次 CLI 调用：智慧芽批检脚本本来就是"传多个检索式一次跑完"，
   // 但巡检项之间是独立方向，合并成一次调用会让单点失败拖垮全部，所以逐个跑。
@@ -76,9 +79,16 @@ export async function sweepWatches(
       result.checked += 1;
     } catch (error) {
       // 单个方向失败（登录掉了 / 页面改版）不能中断整轮巡检
+      failures.push(error);
       result.errors.push({ watchId: watch.id, query: watch.query, message: (error as Error).message });
       result.skipped += 1;
     }
+  }
+
+  // 整轮全失败（例如 CLI 根本没配、登录全掉）不算"跑完了"：把它当错误抛出去，
+  // 上层会映射成 503/500；只有部分失败才返回 200 + errors（那才是"跑了一部分"的诚实结果）。
+  if (result.checked === 0 && targets.length > 0 && failures.length === targets.length) {
+    throw failures[0];
   }
 
   for (const watch of listWatches(db, true).filter((item) => targets.some((t) => t.id === item.id))) {

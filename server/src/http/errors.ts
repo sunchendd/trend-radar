@@ -119,6 +119,15 @@ export function toApiError(err: unknown): MappedError {
     return toApiError(mapped);
   }
 
+  // 领域错误（LLM/查新未配置、产物全不合格等）在这里统一映射：路由层不必各自 try/catch，
+  // 否则新增一条链路（比如巡检）很容易忘了映射，前端就只能看到 internal_error。
+  const domain = mapDomainError(err);
+  if (domain) {
+    const body: ApiError = { error: { code: domain.code, message: domain.message } };
+    if (domain.detail !== undefined) body.error.detail = domain.detail;
+    return { statusCode: domain.statusCode, body };
+  }
+
   if (isFastifyClientError(err)) {
     return {
       statusCode: err.statusCode,

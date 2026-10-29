@@ -33,6 +33,8 @@
  */
 import type { AppConfig } from '../config.js';
 import type { VerdictSummary } from '../ideas/verdict.js';
+import type { Watch } from '../store/watches.js';
+import type { SweepOptions, SweepResult } from '../sweep.js';
 import type {
   GenerateIdeasRequest,
   Idea,
@@ -45,6 +47,8 @@ import type {
   Source,
   Stats,
 } from '../types.js';
+import type { DatabaseSync } from 'node:sqlite';
+import * as watches from '../store/watches.js';
 import { mapDomainError, notFound, serviceUnavailable, unprocessable } from './errors.js';
 
 export interface NewSourceInput {
@@ -116,6 +120,14 @@ export interface HttpDeps {
   autoNovelty(id: string, queries: string[] | undefined): Promise<Idea>;
 
   listRuns(limit?: number): RunRecord[];
+
+  /** 检索式巡检：盯住的方向 + 命中数快照 */
+  listWatches(includeDisabled?: boolean): Watch[];
+  addWatch(input: { query: string; note?: string }): Watch;
+  removeWatch(id: string): boolean;
+  setWatchEnabled(id: string, enabled: boolean): boolean;
+  /** 跑一轮巡检（会调用外部查新 CLI，可能几十秒） */
+  sweepWatches(options?: SweepOptions): Promise<SweepResult>;
   stats(): Stats;
   runCollect(config: AppConfig, opts?: { sourceIds?: string[] }): Promise<RunRecord>;
   generateIdeas(req: GenerateIdeasRequest): Promise<GenerateIdeasResult>;
@@ -316,6 +328,18 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
     },
 
     listRuns: (limit) => q.listRuns(db, limit),
+
+    listWatches: (includeDisabled) => watches.listWatches(db as DatabaseSync, includeDisabled ?? false),
+    addWatch: (input) => watches.addWatch(db as DatabaseSync, input),
+    removeWatch: (id) => watches.removeWatch(db as DatabaseSync, id),
+    setWatchEnabled: (id, enabled) => {
+      const updated = watches.setWatchEnabled(db as DatabaseSync, id, enabled);
+      return updated !== undefined;
+    },
+    sweepWatches: async (options) => {
+      const sweep = (await import('../sweep.js')).sweepWatches;
+      return sweep(config, db as DatabaseSync, options ?? {});
+    },
     stats: () => q.stats(db),
     runCollect: (cfg, opts) => runCollect(cfg, opts),
     generateIdeas: async (req) => {

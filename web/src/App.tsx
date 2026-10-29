@@ -14,6 +14,7 @@ import type { IdeaWithVerdict } from './lib/types';
 import { FeedPage } from './pages/FeedPage';
 import { IdeasPage } from './pages/IdeasPage';
 import { SystemPage } from './pages/SystemPage';
+import { WatchPage } from './pages/WatchPage';
 
 export function App(): JSX.Element {
   const { route, navigate } = useHashRoute();
@@ -89,6 +90,8 @@ export function App(): JSX.Element {
               />
             ) : route.name === 'ideas' ? (
               <IdeasPage navigate={go} liveNonce={live.nonce} liveIdea={live.idea} />
+            ) : route.name === 'watch' ? (
+              <WatchPage liveNonce={live.nonce} />
             ) : (
               <SystemPage liveNonce={live.nonce} />
             )}
