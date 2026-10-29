@@ -89,9 +89,9 @@ export function App(): JSX.Element {
                 onHelp={() => setHelpOpen(true)}
               />
             ) : route.name === 'ideas' ? (
-              <IdeasPage navigate={go} liveNonce={live.nonce} liveIdea={live.idea} />
+              <IdeasPage route={route} navigate={go} liveNonce={live.nonce} liveIdea={live.idea} />
             ) : route.name === 'watch' ? (
-              <WatchPage liveNonce={live.nonce} />
+              <WatchPage liveNonce={live.nonce} navigate={go} />
             ) : (
               <SystemPage liveNonce={live.nonce} />
             )}

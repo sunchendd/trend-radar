@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 import {
   addWatch,
   friendlyError,
+  generateIdeas,
   listWatches,
   removeWatch,
   runSweep,
@@ -18,6 +19,7 @@ import {
   type ApiError,
 } from '../lib/api';
 import { relTime } from '../lib/format';
+import type { RouteName } from '../lib/hooks';
 import type { SweepResult, TrendLevel, Watch, WatchTrend } from '../lib/types';
 import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState } from '../components/States';
@@ -75,7 +77,13 @@ function Sparkline({ history }: { history: { at: string; hits: number | null }[]
   );
 }
 
-export function WatchPage({ liveNonce }: { liveNonce: number }): JSX.Element {
+export function WatchPage({
+  liveNonce,
+  navigate,
+}: {
+  liveNonce: number;
+  navigate: (n: RouteName, params?: Record<string, string>) => void;
+}): JSX.Element {
   const toast = useToastFns();
   const [watches, setWatches] = useState<Watch[]>([]);
   const [trends, setTrends] = useState<WatchTrend[]>([]);
@@ -85,6 +93,8 @@ export function WatchPage({ liveNonce }: { liveNonce: number }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [sweeping, setSweeping] = useState(false);
   const [lastSweep, setLastSweep] = useState<SweepResult | null>(null);
+  /** 正在为该巡检方向生成选题（记 query，避免整页按钮一起转圈） */
+  const [generatingFor, setGeneratingFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -143,6 +153,36 @@ export function WatchPage({ liveNonce }: { liveNonce: number }): JSX.Element {
       setSweeping(false);
     }
   }, [load, toast]);
+
+  /**
+   * 巡检 → 选题闭环：把巡检检索式直接当 focus 交给 LLM。
+   * 不在这里"顺手"改状态或存稿，生成完就跳到工作台让用户自己看/查新——
+   * 自动流转会让人分不清哪条是机器塞进来的。
+   */
+  const onGenerateFromWatch = useCallback(
+    async (watch: Watch) => {
+      setGeneratingFor(watch.id);
+      try {
+        const res = await generateIdeas({ focus: watch.query, count: 1 });
+        const first = res.ideas[0];
+        toast.ok(
+          `已按「${watch.query}」生成选题`,
+          first ? first.title.slice(0, 28) + '…' : '已写入工作台',
+        );
+        navigate('ideas', first ? { idea: first.id } : undefined);
+        void navigate;
+      } catch (err) {
+        const api = toApiError(err);
+        toast.error(
+          api.code === 'llm_not_configured' ? 'LLM 未配置' : '生成失败',
+          api.code === 'llm_not_configured' ? '填 TREND_RADAR_LLM_BASE_URL / MODEL 后可用；也可在工作台手工新建' : api.message,
+        );
+      } finally {
+        setGeneratingFor(null);
+      }
+    },
+    [navigate, toast],
+  );
 
   const trendOf = (id: string): WatchTrend | undefined => trends.find((t) => t.watch.id === id);
 
@@ -247,6 +287,16 @@ export function WatchPage({ liveNonce }: { liveNonce: number }): JSX.Element {
                   {trend && trend.history.length > 1 ? <Sparkline history={trend.history} /> : null}
 
                   <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="btn h-7 px-2 text-[11px]"
+                      disabled={generatingFor !== null}
+                      onClick={() => void onGenerateFromWatch(watch)}
+                      title="以该检索式为 focus 生成一条选题（需要配置 LLM）"
+                    >
+                      {generatingFor === watch.id ? <Spinner size={11} /> : <Icon name="bulb" size={11} />}
+                      出选题
+                    </button>
                     <button
                       type="button"
                       className="btn h-7 px-2 text-[11px]"

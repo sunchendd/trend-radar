@@ -16,7 +16,7 @@ import {
   type ApiError,
 } from '../lib/api';
 import { STATUS_META, VERDICT_META, bandOf, relTime, summaryOf } from '../lib/format';
-import { useHotkeys, useMediaQuery, type RouteName } from '../lib/hooks';
+import { useHotkeys, useMediaQuery, type Route, type RouteName } from '../lib/hooks';
 import type { IdeaStatus, IdeaWithVerdict } from '../lib/types';
 import { IdeaDetail, type NoveltyInput } from '../components/IdeaDetail';
 import { Icon } from '../components/Icon';
@@ -29,10 +29,13 @@ import { Pill, Segmented, Spinner, StatusBadge } from '../components/primitives'
 const STATUS_ORDER: IdeaStatus[] = ['draft', 'verified', 'red-ocean', 'archived'];
 
 export function IdeasPage({
+  route,
   navigate,
   liveNonce,
   liveIdea,
 }: {
+  /** 当前路由：支持 /#/ideas?idea=<id> 直接选中某条（巡检页「出选题」跳过来时用） */
+  route: Route;
   navigate: (n: RouteName, params?: Record<string, string>) => void;
   liveNonce: number;
   /** SSE idea 帧：就地更新那一条，不整表重取 */
@@ -47,7 +50,7 @@ export function IdeasPage({
   const [ideas, setIdeas] = useState<IdeaWithVerdict[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => route.params.get('idea'));
   const [statusFilter, setStatusFilter] = useState<IdeaStatus | 'all'>('all');
   const [nonce, setNonce] = useState(0);
 
