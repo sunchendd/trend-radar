@@ -10,6 +10,7 @@ import {
   createIdea,
   friendlyError,
   generateIdeas,
+  listClusters,
   listIdeas,
   patchIdea,
   toApiError,
@@ -17,7 +18,7 @@ import {
 } from '../lib/api';
 import { STATUS_META, VERDICT_META, bandOf, relTime, summaryOf } from '../lib/format';
 import { useHotkeys, useMediaQuery, type Route, type RouteName } from '../lib/hooks';
-import type { IdeaStatus, IdeaWithVerdict } from '../lib/types';
+import type { IdeaClusterSummary, IdeaStatus, IdeaWithVerdict } from '../lib/types';
 import { IdeaDetail, type NoveltyInput } from '../components/IdeaDetail';
 import { Icon } from '../components/Icon';
 import { IdeaDetailSkeleton, GeneratingSkeleton, ListRowSkeleton } from '../components/Skeleton';
@@ -53,6 +54,8 @@ export function IdeasPage({
   const [selectedId, setSelectedId] = useState<string | null>(() => route.params.get('idea'));
   const [statusFilter, setStatusFilter] = useState<IdeaStatus | 'all'>('all');
   const [nonce, setNonce] = useState(0);
+  /** 同方向选题的聚类摘要：ideaId → 所属簇（只有 size>1 才展示徽标） */
+  const [clusterOf, setClusterOf] = useState<Record<string, { label: string; size: number; titles: string[] }>>({});
 
   const [focus, setFocus] = useState('');
   const [count, setCount] = useState<'1' | '2' | '3'>('2');
@@ -94,6 +97,29 @@ export function IdeasPage({
       cancelled = true;
     };
   }, [nonce]);
+
+  // 聚类是"辅助信息"：拿不到就不显示徽标，绝不能让它把工作台整体拖垮
+  useEffect(() => {
+    let cancelled = false;
+    listClusters()
+      .then((clusters: IdeaClusterSummary[]) => {
+        if (cancelled) return;
+        const map: Record<string, { label: string; size: number; titles: string[] }> = {};
+        for (const cluster of clusters) {
+          if (cluster.size <= 1) continue;
+          for (const id of cluster.ideaIds) {
+            map[id] = { label: cluster.label, size: cluster.size, titles: cluster.titles };
+          }
+        }
+        setClusterOf(map);
+      })
+      .catch(() => {
+        if (!cancelled) setClusterOf({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nonce, ideas.length]);
 
   const selected = useMemo(() => ideas.find((i) => i.id === selectedId) ?? null, [ideas, selectedId]);
 
@@ -322,6 +348,7 @@ export function IdeasPage({
               key={idea.id}
               idea={idea}
               active={idea.id === selectedId}
+              {...(clusterOf[idea.id] ? { cluster: clusterOf[idea.id] } : {})}
               onClick={() => setSelectedId(idea.id)}
             />
           ))
@@ -534,10 +561,13 @@ function FilterChip({
 function IdeaRow({
   idea,
   active,
+  cluster,
   onClick,
 }: {
   idea: IdeaWithVerdict;
   active: boolean;
+  /** 同方向聚类摘要；只有簇内 ≥2 条时才有值 */
+  cluster?: { label: string; size: number; titles: string[] };
   onClick: () => void;
 }): JSX.Element {
   const summary = summaryOf(idea);
@@ -565,6 +595,15 @@ function IdeaRow({
         <Pill color={vm.color} bg={vm.bg} border={vm.border} title={vm.hint} className="max-w-full">
           <span className="truncate">{summary.headline}</span>
         </Pill>
+        {cluster ? (
+          <span
+            className="rounded border border-accent/35 bg-accent/[0.08] px-1.5 py-[1px] text-[9.5px] text-accent"
+            title={`同方向 ${cluster.size} 条：\n${cluster.titles.join('\n')}`}
+          >
+            同方向 ×{cluster.size}
+            {cluster.label ? ` · ${cluster.label}` : ''}
+          </span>
+        ) : null}
         <span className="num">{idea.novelty.length} 查新</span>
         {sparse > 0 ? <span className="num text-accent/80">{sparse} 稀疏</span> : null}
         {idea.cites.length > 0 ? <span className="num">引 {idea.cites.length}</span> : null}

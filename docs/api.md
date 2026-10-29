@@ -13,6 +13,7 @@ Base: `http://127.0.0.1:8787`，全部 `Content-Type: application/json`（SSE �
 | GET | `/api/items` | 分页查询条目，参数见下，返回 `Paged<Item>` |
 | GET | `/api/items/:id` | 单条详情 `Item`，404 时走错误格式 |
 | GET | `/api/sources` | `Source[]`，含 `enabled`/`weight`/`note` |
+| GET | `/api/ideas/clusters?status=` | — | 选题按技术方向聚类：`[{id,label,sharedTerms,size,ideaIds,titles}]`（阈值 0.22，见 `ideas/cluster.ts`） |
 | GET | `/api/ideas` | `Idea[]`，按 `updatedAt` 倒序；`?status=` 可过滤 |
 | GET | `/api/ideas/:id` | 单条选题 `Idea` |
 | GET | `/api/runs?limit=20` | 最近运行记录；`perSource` 为每源 `{sourceId,ms,items,error?}`（v2 起；老记录无此字段） |

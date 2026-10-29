@@ -10,6 +10,7 @@
 import type {
   GenerateIdeasRequest,
   IdeaWithVerdict,
+  IdeaClusterSummary,
   IdeaStatus,
   Item,
   ItemQuery,
@@ -320,6 +321,10 @@ export function getItem(id: string): Promise<Item> {
 
 export function listSources(): Promise<Source[]> {
   return request('/api/sources', { fallback: () => mock.mockSources() });
+}
+
+export function listClusters(status?: IdeaStatus): Promise<IdeaClusterSummary[]> {
+  return request(`/api/ideas/clusters${status ? `?status=${status}` : ''}`, { fallback: () => [] });
 }
 
 export function listIdeas(status?: IdeaStatus): Promise<IdeaWithVerdict[]> {

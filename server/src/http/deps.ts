@@ -34,6 +34,7 @@
 import type { AppConfig } from '../config.js';
 import type { VerdictSummary } from '../ideas/verdict.js';
 import type { Watch } from '../store/watches.js';
+import type { IdeaCluster } from '../ideas/cluster.js';
 import type { SweepOptions, SweepResult } from '../sweep.js';
 import type {
   GenerateIdeasRequest,
@@ -49,6 +50,7 @@ import type {
 } from '../types.js';
 import type { DatabaseSync } from 'node:sqlite';
 import * as watches from '../store/watches.js';
+import { clusterIdeas } from '../ideas/cluster.js';
 import { mapDomainError, notFound, serviceUnavailable, unprocessable } from './errors.js';
 
 export interface NewSourceInput {
@@ -120,6 +122,9 @@ export interface HttpDeps {
   autoNovelty(id: string, queries: string[] | undefined): Promise<Idea>;
 
   listRuns(limit?: number): RunRecord[];
+
+  /** 选题按技术方向聚类（同一方向的多条选题要能被看出来） */
+  clusterIdeas(status?: IdeaStatus): IdeaCluster<Idea>[];
 
   /** 检索式巡检：盯住的方向 + 命中数快照 */
   listWatches(includeDisabled?: boolean): Watch[];
@@ -329,6 +334,7 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
 
     listRuns: (limit) => q.listRuns(db, limit),
 
+    clusterIdeas: (status) => clusterIdeas(q.listIdeas(db, status)),
     listWatches: (includeDisabled) => watches.listWatches(db as DatabaseSync, includeDisabled ?? false),
     addWatch: (input) => watches.addWatch(db as DatabaseSync, input),
     removeWatch: (id) => watches.removeWatch(db as DatabaseSync, id),

@@ -283,6 +283,19 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
     return deps.listIdeas(status).map((idea) => withVerdict(idea, deps));
   });
 
+  // 选题按方向聚类：工作台用它标「同方向 ×N」，避免同一方向被当成新选题重复做
+  app.get('/api/ideas/clusters', async (req) => {
+    const { status } = parse(ideasQuerySchema, req.query);
+    return deps.clusterIdeas(status).map((cluster) => ({
+      id: cluster.id,
+      label: cluster.label,
+      sharedTerms: cluster.sharedTerms,
+      size: cluster.ideas.length,
+      ideaIds: cluster.ideas.map((idea) => idea.id),
+      titles: cluster.ideas.map((idea) => idea.title),
+    }));
+  });
+
   app.get('/api/ideas/:id', async (req) => {
     const { id } = parse(idParams, req.params);
     const idea = deps.getIdea(id);

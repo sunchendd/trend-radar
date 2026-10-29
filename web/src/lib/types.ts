@@ -238,3 +238,14 @@ export interface SweepResult {
   trends: WatchTrend[];
   errors: { watchId: string; query: string; message: string }[];
 }
+
+
+/** 选题聚类（与 server/src/ideas/cluster.ts 对齐） */
+export interface IdeaClusterSummary {
+  id: string;
+  label: string;
+  sharedTerms: string[];
+  size: number;
+  ideaIds: string[];
+  titles: string[];
+}
