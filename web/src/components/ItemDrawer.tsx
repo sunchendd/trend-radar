@@ -87,9 +87,11 @@ export function ItemDrawer({
           <p className="mt-1.5 text-[11.5px] text-ink-3">{item.authors.join(' · ')}</p>
         ) : null}
 
-        <div className="mt-3.5 grid grid-cols-2 gap-x-3 gap-y-2 rounded-tile border border-line bg-sunken px-3 py-2.5 sm:grid-cols-4">
+        <div className="mt-3.5 grid grid-cols-2 gap-x-3 gap-y-2 rounded-tile border border-line bg-sunken px-3 py-2.5 sm:grid-cols-5">
           <Meta label="发布" value={absTime(item.publishedAt)} />
           <Meta label="抓取" value={absTime(item.fetchedAt)} />
+          {/* 源权重是打分里唯一"人为设定"的输入，单独露出来才解释得清为什么同主题分数不同 */}
+          <Meta label="源权重" value={source ? `×${source.weight.toFixed(1)}` : '—'} mono />
           <Meta label="外部 ID" value={item.externalId ?? '—'} mono />
           <Meta label="条目 ID" value={item.id.slice(0, 12)} mono />
         </div>
