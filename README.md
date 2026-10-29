@@ -105,12 +105,22 @@ LLM 未配置时不是空壳：`POST /api/ideas` 让用户自己把想法结构�
 ## 快速开始
 
 ```bash
-git clone https://github.com/<you>/trend-radar.git && cd trend-radar
-npm install
+git clone https://github.com/sunchendd/trend-radar.git && cd trend-radar
+npm ci                        # 锁文件里是公网 registry；内网加 --registry=<你的镜像>
 cp .env.example .env          # 想用选题生成就填 LLM_BASE_URL / LLM_API_KEY
 npm run build
 npm start                     # http://127.0.0.1:8787
 ```
+
+**判断「真的跑通了」的 5 条**（本仓库在干净 clone 上实测过，2026-10-29）：
+
+| 命令 | 期望 |
+|---|---|
+| `npm ci` | 223 包，无原生编译（`node:sqlite`，不需要 python/gcc） |
+| `npm test` | `Tests 216 passed`，全程不出网、不调外部 CLI |
+| `npm run build` | `web/dist/assets/index-*.js ≈ 378 KB` |
+| `curl :8787/api/health` | `{"ok":true,...}`；首页 `assets/*.js` 的 Content-Type 是 `application/javascript` |
+| `POST /api/collect` | 首次空库：`fetched 99 / added 95 / errors 0`，`perSource` 显示每源耗时 |
 
 开发模式（前后端热更新）：
 
