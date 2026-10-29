@@ -62,3 +62,19 @@ npm run build --workspace web && npm run typecheck --workspace web
 - `WatchPage` 只呈现后端 `ideas/trend.ts` 的判读结果（档位阈值不在前端复制一份）。
 - 折线图手写 SVG：命中数为 `null`（解析失败）画**空心方块**、0 命中是贴底实心点——两者语义不同，视觉上不能混。
 - 生成失败按 code 分流文案：`llm_not_configured` → "填 LLM_BASE_URL / LLM_MODEL 后可用；也可手工新建"，其余走通用错误。
+
+
+## 可达性与移动端（2026-10 走查记录）
+
+**已具备**：`<nav aria-label>` 两个（主导航 / 底部导航）、每页一个 `<h1>`、所有可交互元素都有可访问名（
+实测 feed 页未命名元素 = 0）、`:focus` 2px 实线轮廓、热键在输入框内不触发（`isEditableTarget`）。
+
+**本轮补齐**：
+- `<main id="main" tabIndex={-1}>` 主地标（之前整页没有 main，读屏跳转无落点）
+- 「跳到主要内容」skip link，**第一下 Tab 就落在它上面**（实测）
+- Toast 容器加 `aria-live="polite"`——`role="region"` 不会播报新插入的内容
+
+**移动端实测（390×844）**：四个页面 `scrollWidth - clientWidth = 0`，无横向溢出；
+底部 Tab 四项齐全（情报流 / 选题 / 巡检 / 信源）。
+
+![移动端选题工作台](screens/mobile.png)

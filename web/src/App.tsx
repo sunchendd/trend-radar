@@ -63,6 +63,13 @@ export function App(): JSX.Element {
   return (
     <ToastProvider>
       <div className="flex min-h-dvh">
+        {/* 键盘用户第一下 Tab 就能跳过导航直达内容：四个页面 + 长列表，跳过去很省力 */}
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[90] focus:rounded-md focus:border focus:border-accent/50 focus:bg-panel focus:px-3 focus:py-1.5 focus:text-[12px] focus:text-accent"
+        >
+          跳到主要内容
+        </a>
         <NavRail
           current={route.name}
           onNavigate={go}
@@ -80,7 +87,7 @@ export function App(): JSX.Element {
 
           {demo ? <DemoBanner /> : null}
 
-          <div className="min-w-0 flex-1 pb-14 md:pb-0">
+          <main id="main" tabIndex={-1} className="min-w-0 flex-1 pb-14 outline-none md:pb-0">
             {route.name === 'feed' ? (
               <FeedPage
                 route={route}
@@ -95,7 +102,7 @@ export function App(): JSX.Element {
             ) : (
               <SystemPage liveNonce={live.nonce} />
             )}
-          </div>
+          </main>
         </div>
       </div>
 

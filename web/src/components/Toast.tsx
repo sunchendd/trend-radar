@@ -102,6 +102,9 @@ export function ToastProvider({ children }: { children: ReactNode }): JSX.Elemen
         className="pointer-events-none fixed right-3 bottom-16 z-[80] flex w-[min(92vw,380px)] flex-col gap-2 md:bottom-5"
         role="region"
         aria-label="通知"
+        // 只读屏播报需要 aria-live：role=region 不会把新插入的内容念出来
+        aria-live="polite"
+        aria-atomic="false"
       >
         {items.map((t) => (
           <ToastCard key={t.id} item={t} onDismiss={() => dismiss(t.id)} />
