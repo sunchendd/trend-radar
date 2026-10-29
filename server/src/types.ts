@@ -85,6 +85,19 @@ export interface RunRecord {
   /** 抓到的原始条目数 */
   fetched: number;
   errors: SourceError[];
+  /**
+   * 每个源的耗时与产出（v2 新增）。用来回答"哪个源最慢/最不产出"——
+   * 没有它，采集慢 22 秒时用户只能猜是 arXiv 还是某个 RSS。
+   */
+  perSource?: RunPerSource[];
+}
+
+export interface RunPerSource {
+  sourceId: string;
+  /** 毫秒；失败时也有值（超时/连接失败同样耗时间） */
+  ms: number;
+  items: number;
+  error?: string;
 }
 
 // ---------------------------------------------------------------- 专利选题

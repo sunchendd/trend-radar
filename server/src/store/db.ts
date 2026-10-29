@@ -88,6 +88,10 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       CREATE INDEX ideas_status ON ideas(status);
     `);
   },
+  // v1 -> v2：记录每个源的耗时与产出（老数据没有这一列，读出来是 undefined，不是空数组）
+  (db) => {
+    db.exec(`ALTER TABLE runs ADD COLUMN per_source TEXT`);
+  },
 ];
 
 function applyMigrations(db: DatabaseSync): void {

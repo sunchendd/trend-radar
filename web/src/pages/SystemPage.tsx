@@ -14,7 +14,7 @@ import {
   type ApiError,
 } from '../lib/api';
 import { absTime, relTime, runDuration } from '../lib/format';
-import type { RunRecord, Source, SourceKind } from '../lib/types';
+import type { RunPerSource, RunRecord, Source, SourceKind } from '../lib/types';
 import { Icon } from '../components/Icon';
 import { Drawer } from '../components/Overlay';
 import { ListRowSkeleton, Skeleton } from '../components/Skeleton';
@@ -442,7 +442,9 @@ function RunsTable({ runs, loading }: { runs: RunRecord[]; loading: boolean }): 
               <span className="num text-right text-[11px] text-ink-2">{run.sourceCount}</span>
               <span className="num text-right text-[11px] text-ink-2">{run.fetched}</span>
               <span className="num text-right text-[11px] font-medium text-ink">{run.added}</span>
-              <span className="num text-right text-[11px] text-ink-3">{runDuration(run)}</span>
+              <span className="num text-right text-[11px] text-ink-3" title={slowestHint(run)}>
+                {runDuration(run)}
+              </span>
               <span className="flex justify-end text-ink-3">
                 <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
               </span>
@@ -454,6 +456,7 @@ function RunsTable({ runs, loading }: { runs: RunRecord[]; loading: boolean }): 
                   <span className="num">start {absTime(run.startedAt)}</span>
                   <span className="num">end {absTime(run.finishedAt)}</span>
                 </div>
+                {run.perSource && run.perSource.length > 0 ? <PerSourceBars rows={run.perSource} /> : null}
                 {run.errors.length === 0 ? (
                   <div className="text-[11px] text-ink-2">没有错误。</div>
                 ) : (
@@ -475,6 +478,57 @@ function RunsTable({ runs, loading }: { runs: RunRecord[]; loading: boolean }): 
       })}
     </div>
   );
+}
+
+// ------------------------------------------------------------------ 每源耗时
+
+/**
+ * 每源耗时条：回答「这次采集为什么慢」。
+ * 条长按耗时占比，失败源标红并带上错误——慢和错是两件事，不能只给一个总数。
+ */
+function PerSourceBars({ rows }: { rows: RunPerSource[] }): JSX.Element {
+  const max = Math.max(1, ...rows.map((r) => r.ms));
+  const sorted = [...rows].sort((a, b) => b.ms - a.ms);
+  return (
+    <div className="mb-2">
+      <div className="mb-1 text-[10px] tracking-wide text-ink-3 uppercase">每源耗时（慢 → 快）</div>
+      <div className="space-y-1">
+        {sorted.map((row) => {
+          const failed = Boolean(row.error);
+          return (
+            <div key={row.sourceId} className="flex items-center gap-2">
+              <span className="num w-[186px] shrink-0 truncate text-[10.5px] text-ink-2" title={row.sourceId}>
+                {row.sourceId}
+              </span>
+              <span className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.05]">
+                <span
+                  className="block h-full rounded-full"
+                  style={{
+                    width: `${Math.max(3, Math.round((row.ms / max) * 100))}%`,
+                    background: failed ? 'var(--color-warn)' : 'var(--color-accent)',
+                    opacity: failed ? 0.85 : 0.7,
+                  }}
+                />
+              </span>
+              <span className="num w-[52px] shrink-0 text-right text-[10.5px] text-ink-2">
+                {(row.ms / 1000).toFixed(1)}s
+              </span>
+              <span className="num w-[38px] shrink-0 text-right text-[10px] text-ink-3">
+                {failed ? '失败' : `${row.items} 条`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** 折叠行上只放最慢那个源：不展开也能看出是谁拖慢的 */
+function slowestHint(run: RunRecord): string {
+  if (!run.perSource || run.perSource.length === 0) return '这条运行记录没有每源耗时（v2 之前的老数据）';
+  const slowest = [...run.perSource].sort((a, b) => b.ms - a.ms)[0];
+  return slowest ? `最慢：${slowest.sourceId} ${(slowest.ms / 1000).toFixed(1)}s` : '';
 }
 
 // ------------------------------------------------------------------ 新增信源

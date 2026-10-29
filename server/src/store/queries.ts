@@ -8,6 +8,7 @@ import type {
   ItemQuery,
   NoveltyRecord,
   Paged,
+  RunPerSource,
   RunRecord,
   ScoreReason,
   Source,
@@ -91,6 +92,8 @@ function mapRun(row: Row): RunRecord {
     added: num(row['added']),
     fetched: num(row['fetched']),
     errors: jsonArray<SourceError>(row['errors']),
+    // 老运行记录没有这一列：保持 undefined（而不是 [])，UI 才能区分"没记录"和"真的零耗时"
+    ...(typeof row['per_source'] === 'string' ? { perSource: jsonArray<RunPerSource>(row['per_source']) } : {}),
   };
 }
 
@@ -422,8 +425,8 @@ export function pruneItems(db: DatabaseSync, ttlDays: number, now: Date = new Da
 
 export function insertRun(db: DatabaseSync, run: RunRecord): void {
   db.prepare(
-    `INSERT OR REPLACE INTO runs (id, started_at, finished_at, source_count, added, fetched, errors)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO runs (id, started_at, finished_at, source_count, added, fetched, errors, per_source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     run.id,
     run.startedAt,
@@ -432,6 +435,7 @@ export function insertRun(db: DatabaseSync, run: RunRecord): void {
     run.added,
     run.fetched,
     JSON.stringify(run.errors),
+    run.perSource === undefined ? null : JSON.stringify(run.perSource),
   );
 }
 

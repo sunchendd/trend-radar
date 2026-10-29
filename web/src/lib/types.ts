@@ -85,6 +85,15 @@ export interface RunRecord {
   /** 抓到的原始条目数 */
   fetched: number;
   errors: SourceError[];
+  /** 每源耗时与产出（老运行记录没有该字段） */
+  perSource?: RunPerSource[];
+}
+
+export interface RunPerSource {
+  sourceId: string;
+  ms: number;
+  items: number;
+  error?: string;
 }
 
 // ---------------------------------------------------------------- 专利选题

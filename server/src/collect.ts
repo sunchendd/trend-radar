@@ -26,9 +26,8 @@ export interface CollectDeps extends Omit<FetchDeps, 'sources'> {
 /**
  * 一次采集的完整诊断。
  *
- * 为什么不把这些字段塞进 RunRecord：RunRecord 是冻结契约（docs/api.md + web 共用），
- * 加字段要同步改契约；而「每源耗时」目前只有 CLI 和运行日志页想看，
- * 所以放在 RunRecord 之外的旁挂对象里，API 要用时自己取。
+ * perSource 自 v2 起也进 RunRecord（可选字段，老数据没有），因为运行日志页要回答
+ * 「这次采集为什么慢」——只在 CLI 里旁挂等于用户看不到。
  */
 export interface DetailedRun {
   run: RunRecord;
@@ -132,6 +131,8 @@ async function collectOnce(config: AppConfig, deps: CollectDeps): Promise<Detail
       fetched: result.fetched,
       // 按 sourceId 排序：并发抓取下错误顺序不确定，固定下来便于 diff 与前端展示稳定
       errors: [...result.errors].sort((a, b) => a.sourceId.localeCompare(b.sourceId)),
+      // 每源耗时/条数一并落库（v2 起 RunRecord 有 perSource；老库该列为 NULL，读出来是 undefined）
+      perSource: [...result.timings].sort((a, b) => a.sourceId.localeCompare(b.sourceId)),
     };
 
     insertRun(db, run);

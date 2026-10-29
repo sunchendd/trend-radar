@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -471,5 +474,51 @@ describe('选题读写（供 ideas 模块使用）', () => {
   it('未知 status 落库时降级为 draft（防止 dirty data 打崩前端）', () => {
     upsertIdea(db, { ...makeIdea({ id: 'i3' }), status: 'opportunity' as Idea['status'] });
     expect(getIdea(db, 'i3')?.status).toBe('draft');
+  });
+});
+
+describe('per_source 迁移与读写（v1 → v2）', () => {
+  it('新运行记录能存能读 每源耗时', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tr-persource-'));
+    const db = openDb(dir);
+    try {
+      insertRun(db, {
+        id: 'run-1',
+        startedAt: '2026-10-29T00:00:00.000Z',
+        finishedAt: '2026-10-29T00:00:22.000Z',
+        sourceCount: 2,
+        added: 5,
+        fetched: 6,
+        errors: [],
+        perSource: [
+          { sourceId: 'arxiv-kv', ms: 18_400, items: 4 },
+          { sourceId: 'gh-releases', ms: 900, items: 2, error: 'fetch failed' },
+        ],
+      });
+      const [run] = listRuns(db, 1);
+      expect(run?.perSource).toHaveLength(2);
+      expect(run?.perSource?.[0]).toMatchObject({ sourceId: 'arxiv-kv', ms: 18_400, items: 4 });
+      expect(run?.perSource?.[1]?.error).toBe('fetch failed');
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('老库升级后历史运行记录没有 perSource（undefined ≠ 空数组）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tr-persource-old-'));
+    const db = openDb(dir);
+    try {
+      // 模拟 v1 遗留行：直接写入不带 per_source 的记录
+      db.prepare(
+        `INSERT INTO runs (id, started_at, finished_at, source_count, added, fetched, errors)
+         VALUES ('run-old', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:10.000Z', 1, 1, 1, '[]')`,
+      ).run();
+      const [run] = listRuns(db, 1);
+      expect(run?.perSource).toBeUndefined();
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

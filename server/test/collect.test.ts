@@ -470,7 +470,7 @@ describe('runCollect：端到端（假网络 + 真 SQLite）', () => {
     expect(third.id).not.toBe(first.id);
   });
 
-  it('runCollectDetailed 旁挂每源耗时，且不动 RunRecord 契约', async () => {
+  it('runCollectDetailed 每源耗时同时进 RunRecord（v2 契约）', async () => {
     const config = makeConfig(dataDir);
     const { fetch } = fakeFetch(ROUTES);
     const detailed = await runCollectDetailed(config, {
@@ -481,10 +481,12 @@ describe('runCollect：端到端（假网络 + 真 SQLite）', () => {
       scoreOptions: { now: NOW },
     });
 
-    // RunRecord 字段与 runCollect 完全一致（契约不变）
+    // v2 起 perSource 也属于 RunRecord（运行日志页要展示"哪个源慢"）；
+    // 其余字段仍是原契约，多一个少一个都要让这里失败。
     expect(Object.keys(detailed.run).sort()).toEqual(
-      ['added', 'errors', 'fetched', 'finishedAt', 'id', 'sourceCount', 'startedAt'].sort(),
+      ['added', 'errors', 'fetched', 'finishedAt', 'id', 'perSource', 'sourceCount', 'startedAt'].sort(),
     );
+    expect(detailed.run.perSource).toEqual(detailed.perSource);
 
     expect(detailed.perSource).toHaveLength(SOURCES.length);
     expect(detailed.perSource.map((entry) => entry.sourceId)).toEqual(
