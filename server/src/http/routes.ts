@@ -12,6 +12,7 @@ import type { Idea, Item, ItemQuery, NoveltyRecord, RunRecord } from '../types.j
 import type { HttpDeps } from './deps.js';
 import { notFound, parse, serviceUnavailable } from './errors.js';
 import type { SseHub } from './sse.js';
+import { disclosureFilename, toDisclosureMarkdown } from '../ideas/disclosure.js';
 
 const DEFAULT_LIMIT = 30;
 const EXPORT_LIMIT = 5000;
@@ -228,6 +229,31 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
     const idea = deps.getIdea(id);
     if (!idea) throw notFound(`选题 ${id} 不存在`);
     return withVerdict(idea, deps);
+  });
+
+  // 导出专利交底书：结构化章节 + 如实转录查新记录（不编造实验数据与附图）
+  app.get('/api/ideas/:id/disclosure', async (req, reply) => {
+    const { id } = parse(idParams, req.params);
+    const idea = deps.getIdea(id);
+    if (!idea) throw notFound(`选题 ${id} 不存在`);
+    const summary = deps.summarizeVerdict?.(idea.novelty);
+    // cites 里存的是条目 id，导出时要换成可点开的标题与链接
+    const cites = idea.cites
+      .map((citeId) => deps.getItem(citeId))
+      .filter((item): item is Item => item !== undefined)
+      .map((item) => ({ title: item.title, url: item.url, score: item.score }));
+    const markdown = toDisclosureMarkdown(idea, {
+      ...(summary ? { verdictHeadline: summary.headline } : {}),
+      cites,
+    });
+    const filename = disclosureFilename(idea);
+    return reply
+      .header('content-type', 'text/markdown; charset=utf-8')
+      .header(
+        'content-disposition',
+        `attachment; filename="disclosure.md"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      )
+      .send(markdown);
   });
 
   app.get('/api/runs', async () => deps.listRuns(RUNS_PAGE));

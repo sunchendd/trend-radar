@@ -115,6 +115,15 @@ export function IdeaDetail({
             <Icon name={copied ? 'check' : 'copy'} size={12} />
             {copied ? '已复制 Markdown' : '复制 Markdown'}
           </button>
+          <a
+            className="btn h-7 px-2 text-[11.5px]"
+            href={`/api/ideas/${idea.id}/disclosure`}
+            download
+            title="下载符合国内实务章节结构的专利交底书（Markdown）"
+          >
+            <Icon name="doc" size={12} />
+            导出交底书
+          </a>
           {idea.status !== 'archived' ? (
             <>
               <button
