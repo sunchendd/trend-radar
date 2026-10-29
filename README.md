@@ -18,6 +18,9 @@
 
 ![信源与日志](docs/screens/system.png)
 
+> 截图数据来源：情报条目与信源权重是真实抓取（arXiv / GitHub Releases / FlashInfer），
+> 选题正文与检索式由真实 LLM 生成，查新命中数与头部申请人来自智慧芽实际检索结果。
+
 </div>
 
 ---
