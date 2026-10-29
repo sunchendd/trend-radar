@@ -1,0 +1,19 @@
+{
+  "name": "trend-radar",
+  "private": true,
+  "version": "0.1.0",
+  "description": "技术情报聚合看板 + 中国发明专利选题生产线",
+  "type": "module",
+  "workspaces": ["server", "web"],
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "dev": "npm run dev --workspace server & npm run dev --workspace web",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "build": "npm run build --workspace server && npm run build --workspace web",
+    "test": "npm run test --workspace server",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
+    "start": "npm run start --workspace server"
+  },
+  "license": "MIT"
+}

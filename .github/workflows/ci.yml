@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build server + web
+        run: npm run build
+      - name: Smoke test API
+        run: |
+          node server/dist/index.js serve &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8787/api/health && break || sleep 1
+          done
+          curl -sf http://127.0.0.1:8787/api/stats > /dev/null
