@@ -13,6 +13,7 @@ import type { HttpDeps } from './deps.js';
 import { notFound, parse, serviceUnavailable } from './errors.js';
 import type { SseHub } from './sse.js';
 import { disclosureFilename, toDisclosureMarkdown } from '../ideas/disclosure.js';
+import { buildDocx } from '../ideas/docx.js';
 
 const DEFAULT_LIMIT = 30;
 const EXPORT_LIMIT = 5000;
@@ -219,6 +220,10 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
 
   app.get('/api/sources', async () => deps.listSources());
 
+  const disclosureQuerySchema = z.object({
+    format: z.enum(['md', 'docx']).optional(),
+  });
+
   const watchesQuerySchema = z.object({
     all: z.enum(['true', 'false']).optional(),
   });
@@ -288,6 +293,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
   // 导出专利交底书：结构化章节 + 如实转录查新记录（不编造实验数据与附图）
   app.get('/api/ideas/:id/disclosure', async (req, reply) => {
     const { id } = parse(idParams, req.params);
+    const { format } = parse(disclosureQuerySchema, req.query);
     const idea = deps.getIdea(id);
     if (!idea) throw notFound(`选题 ${id} 不存在`);
     const summary = deps.summarizeVerdict?.(idea.novelty);
@@ -301,6 +307,19 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
       cites,
     });
     const filename = disclosureFilename(idea);
+
+    if (format === 'docx') {
+      // Word 是专利代理人实际要的格式；docx 由零依赖的 OOXML 写入器生成
+      const buffer = buildDocx(markdown);
+      return reply
+        .header('content-type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+        .header(
+          'content-disposition',
+          `attachment; filename="disclosure.docx"; filename*=UTF-8''${encodeURIComponent(filename.replace(/\.md$/, '.docx'))}`,
+        )
+        .send(buffer);
+    }
+
     return reply
       .header('content-type', 'text/markdown; charset=utf-8')
       .header(

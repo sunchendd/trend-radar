@@ -115,15 +115,26 @@ export function IdeaDetail({
             <Icon name={copied ? 'check' : 'copy'} size={12} />
             {copied ? '已复制 Markdown' : '复制 Markdown'}
           </button>
-          <a
-            className="btn h-7 px-2 text-[11.5px]"
-            href={`/api/ideas/${idea.id}/disclosure`}
-            download
-            title="下载符合国内实务章节结构的专利交底书（Markdown）"
-          >
-            <Icon name="doc" size={12} />
-            导出交底书
-          </a>
+          <span className="inline-flex items-center overflow-hidden rounded-md border border-line">
+            <a
+              className="flex h-7 items-center gap-1 bg-white/[0.02] px-2 text-[11.5px] text-ink-2 transition-colors hover:text-ink"
+              href={`/api/ideas/${idea.id}/disclosure`}
+              download
+              title="下载交底书 Markdown（九章结构，可直接粘进 Word）"
+            >
+              <Icon name="doc" size={12} />
+              交底书 .md
+            </a>
+            <a
+              className="flex h-7 items-center gap-1 border-l border-line bg-white/[0.02] px-2 text-[11.5px] text-ink-2 transition-colors hover:text-ink"
+              href={`/api/ideas/${idea.id}/disclosure?format=docx`}
+              download
+              title="下载 Word 版交底书（.docx，代理人可直接改）"
+            >
+              <Icon name="doc" size={12} />
+              .docx
+            </a>
+          </span>
           {idea.status !== 'archived' ? (
             <>
               <button

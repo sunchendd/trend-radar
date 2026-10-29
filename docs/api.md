@@ -17,7 +17,7 @@ Base: `http://127.0.0.1:8787`，全部 `Content-Type: application/json`（SSE �
 | GET | `/api/ideas/:id` | 单条选题 `Idea` |
 | GET | `/api/runs?limit=20` | 最近运行记录；`perSource` 为每源 `{sourceId,ms,items,error?}`（v2 起；老记录无此字段） |
 | GET | `/api/export?format=csv\|json` | 导出条目（csv 列：score,kind,title,url,sourceId,publishedAt） |
-| GET | `/api/ideas/:id/disclosure` | 导出该选题的**专利交底书 Markdown**（`text/markdown` + attachment，九章结构；查新记录如实转录，`0（零命中）` 与 `解析失败` 分开标注） |
+| GET | `/api/ideas/:id/disclosure?format=md\|docx` | 导出该选题的**专利交底书**（默认 md 走 `text/markdown`；`docx` 走 OOXML；均为 attachment，九章结构；查新记录如实转录，`0（零命中）` 与 `解析失败` 分开标注） |
 
 `/api/items` 查询参数（全部可选）：
 
