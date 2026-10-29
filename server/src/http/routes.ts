@@ -219,6 +219,49 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
 
   app.get('/api/sources', async () => deps.listSources());
 
+  // 手工创建选题：LLM 不可用时用户仍能把想法结构化进工作台（与生成结果同一张表、同一套判读）
+  const manualIdeaSchema = z.object({
+    title: z.string().trim().min(6).max(200),
+    problem: z.string().trim().min(10).max(4000),
+    solution: z.string().trim().min(20).max(8000),
+    effect: z.string().trim().min(6).max(2000),
+    keywords: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+    ipcHints: z
+      .array(z.string().trim().regex(/^[A-H]\d{2}[A-Z]\s?\d+\/\d+$/i, 'IPC 号格式非法，例：G06F12/0871'))
+      .max(8)
+      .optional(),
+    queries: z.array(z.string().trim().min(3).max(60)).max(6).optional(),
+    risks: z.array(z.string().trim().min(4).max(300)).max(6).optional(),
+    focus: z.string().trim().max(200).optional(),
+  });
+
+  app.post('/api/ideas', async (req, reply) => {
+    const body = parse(manualIdeaSchema, req.body ?? {});
+    const now = new Date().toISOString();
+    const id = `idea-manual-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const idea: Idea = {
+      id,
+      createdAt: now,
+      updatedAt: now,
+      title: body.title,
+      problem: body.problem,
+      solution: body.solution,
+      effect: body.effect,
+      keywords: body.keywords ?? [],
+      ipcHints: body.ipcHints ?? [],
+      queries: body.queries ?? [],
+      risks: body.risks ?? [],
+      status: 'draft',
+      cites: [],
+      focus: body.focus ?? '',
+      novelty: [],
+      promptVersion: 'manual',
+    };
+    const saved = deps.saveIdea(idea);
+    hub.broadcast('idea', withVerdict(saved, deps));
+    return reply.code(201).send(withVerdict(saved, deps));
+  });
+
   app.get('/api/ideas', async (req) => {
     const { status } = parse(ideasQuerySchema, req.query);
     return deps.listIdeas(status).map((idea) => withVerdict(idea, deps));

@@ -36,6 +36,7 @@ Base: `http://127.0.0.1:8787`，全部 `Content-Type: application/json`（SSE �
 | PATCH | `/api/sources/:id` | `{ enabled?: boolean, weight?: number, note?: string }` | 启停/调权重；`weight` 限制 0.1–3 |
 | POST | `/api/sources` | `{ id, kind, label, url, weight?, tags?, note? }` | 新增源，先探活（HTTP 200 且能解析出条目）再落库，探活失败返回 422 |
 | DELETE | `/api/sources/:id` | — | 删除源（条目保留，标为 orphan） |
+| POST | `/api/ideas` | `{ title, problem, solution, effect, keywords?, ipcHints?, queries?, risks?, focus? }` | **手工创建**选题（不经过 LLM），201 返回 `IdeaWithVerdict`；IPC 号不合法/字段过短 → 400 |
 | POST | `/api/ideas/generate` | `GenerateIdeasRequest` | 调 LLM 生成选题，返回 `{ ideas: Idea[], usedItems: string[], dropped: {title,reasons[]}[] }`；**生成结果会落库**；LLM 未配置返回 503 `code=llm_not_configured` |
 | PATCH | `/api/ideas/:id` | `{ status?, title?, problem?, solution?, effect?, queries?, risks? }` | 人工修订 |
 | DELETE | `/api/ideas/:id` | — | 归档（软删，status=archived） |

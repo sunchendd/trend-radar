@@ -387,6 +387,23 @@ export function generateIdeas(
   });
 }
 
+export interface ManualIdeaPayload {
+  title: string;
+  problem: string;
+  solution: string;
+  effect: string;
+  keywords?: string[];
+  ipcHints?: string[];
+  queries?: string[];
+  risks?: string[];
+  focus?: string;
+}
+
+/** 手工创建选题：LLM 不可用时（或想自己写一条）也能进工作台，与生成结果同一张表 */
+export function createIdea(req: ManualIdeaPayload): Promise<IdeaWithVerdict> {
+  return request('/api/ideas', { method: 'POST', body: req });
+}
+
 export function patchIdea(
   id: string,
   patch: { status?: IdeaStatus; title?: string; problem?: string; solution?: string; effect?: string; queries?: string[]; risks?: string[] },

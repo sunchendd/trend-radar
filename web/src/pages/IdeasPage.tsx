@@ -7,6 +7,7 @@ import {
   addNovelty,
   archiveIdea,
   autoNovelty,
+  createIdea,
   friendlyError,
   generateIdeas,
   listIdeas,
@@ -22,6 +23,7 @@ import { Icon } from '../components/Icon';
 import { IdeaDetailSkeleton, GeneratingSkeleton, ListRowSkeleton } from '../components/Skeleton';
 import { EmptyState, ErrorState } from '../components/States';
 import { useToastFns } from '../components/Toast';
+import { Modal } from '../components/Overlay';
 import { Pill, Segmented, Spinner, StatusBadge } from '../components/primitives';
 
 const STATUS_ORDER: IdeaStatus[] = ['draft', 'verified', 'red-ocean', 'archived'];
@@ -53,6 +55,12 @@ export function IdeasPage({
   const [count, setCount] = useState<'1' | '2' | '3'>('2');
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<ApiError | null>(null);
+
+  // 手工新建：LLM 不可用（未配 key）或想自己写一条时的唯一入口
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manual, setManual] = useState({ title: '', problem: '', solution: '', effect: '' });
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
 
   const [statusBusy, setStatusBusy] = useState(false);
   const [noveltyBusy, setNoveltyBusy] = useState(false);
@@ -121,6 +129,30 @@ export function IdeasPage({
   }, []);
 
   // ---------------------------------------------------------------- 生成
+
+  const onManualCreate = useCallback(async () => {
+    setManualBusy(true);
+    setManualError(null);
+    try {
+      const idea = await createIdea({
+        title: manual.title,
+        problem: manual.problem,
+        solution: manual.solution,
+        effect: manual.effect,
+        focus: focus.trim() || undefined,
+      });
+      setIdeas((prev) => [idea, ...prev]);
+      setSelectedId(idea.id);
+      setManualOpen(false);
+      setManual({ title: '', problem: '', solution: '', effect: '' });
+      toast.ok('已创建手工选题', '记得先查新再改状态');
+    } catch (err) {
+      const api = toApiError(err);
+      setManualError(api.message || '创建失败');
+    } finally {
+      setManualBusy(false);
+    }
+  }, [focus, manual, toast]);
 
   const onGenerate = useCallback(async () => {
     const f = focus.trim();
@@ -338,6 +370,15 @@ export function IdeasPage({
               value={count}
               onChange={(v) => setCount(v ?? '1')}
             />
+            <button
+              type="button"
+              className="btn h-9 px-3"
+              onClick={() => setManualOpen(true)}
+              title="不依赖 LLM，自己写一条选题进工作台（同样要查新）"
+            >
+              <Icon name="plus" size={13} />
+              手工新建
+            </button>
             <button type="submit" className="btn btn-accent h-9 px-3.5" disabled={generating}>
               {generating ? <Spinner size={13} /> : <Icon name="flask" size={13} />}
               {generating ? '生成中…' : '生成'}
@@ -361,6 +402,49 @@ export function IdeasPage({
           </div>
         ) : null}
       </form>
+
+      <Modal open={manualOpen} onClose={() => setManualOpen(false)} label="手工新建选题">
+        <div className="px-4 py-3.5">
+          <div className="flex items-center gap-2">
+            <Icon name="doc" size={14} className="text-accent" />
+            <span className="text-[13px] font-medium text-ink">手工新建选题</span>
+            <span className="text-[10.5px] text-ink-3">不经过 LLM；字段要求与生成结果一致，保存后同样要查新</span>
+          </div>
+          <div className="mt-3 grid gap-2">
+            {([
+              ['title', '发明名称', '最少 6 字，例如：一种 KV 缓存分级传输方法'],
+              ['problem', '技术问题', '现有技术的缺陷，最少 10 字'],
+              ['solution', '技术方案', '多条相互配合的技术手段，最少 20 字'],
+              ['effect', '有益效果', '量化口径，例如：传输字节数降低 50%'],
+            ] as const).map(([key, label, placeholder]) => (
+              <label key={key} className="grid gap-1">
+                <span className="text-[10.5px] text-ink-3">{label}</span>
+                <textarea
+                  className="input min-h-[62px] resize-y px-2.5 py-1.5 text-[12px]"
+                  placeholder={placeholder}
+                  value={manual[key]}
+                  onChange={(e) => setManual((prev) => ({ ...prev, [key]: e.target.value }))}
+                />
+              </label>
+            ))}
+          </div>
+          {manualError ? <p className="mt-2 text-[11px] text-warn">{manualError}</p> : null}
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button type="button" className="btn h-8 px-3 text-[11.5px]" onClick={() => setManualOpen(false)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="btn btn-accent h-8 px-3 text-[11.5px]"
+              disabled={manualBusy}
+              onClick={() => void onManualCreate()}
+            >
+              {manualBusy ? <Spinner size={12} /> : <Icon name="check" size={12} />}
+              保存
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* 列表 + 详情 */}
       <div className="mt-3 flex gap-3 lg:gap-4">

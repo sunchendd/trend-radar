@@ -110,6 +110,8 @@ export interface HttpDeps {
   getIdea(id: string): Idea | undefined;
   updateIdea(id: string, patch: IdeaPatch): Idea | undefined;
   archiveIdea(id: string): Idea | undefined;
+  /** 手工创建工作台里的选题（LLM 未配置或想自己写一条时用）；返回落库后的对象 */
+  saveIdea(idea: Idea): Idea;
   recordNovelty(id: string, record: NoveltyRecord): Idea | undefined;
   autoNovelty(id: string, queries: string[] | undefined): Promise<Idea>;
 
@@ -290,6 +292,7 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
     getIdea: (id) => q.getIdea(db, id),
     updateIdea: (id, patch) => q.updateIdea(db, id, patch),
     archiveIdea: (id) => q.updateIdea(db, id, { status: 'archived' }),
+    saveIdea: (idea) => q.upsertIdea(db, idea),
     recordNovelty: (id, record) => {
       const updated = q.addNoveltyRecord(db, id, record);
       return updated ? rejudge(updated) : undefined;
