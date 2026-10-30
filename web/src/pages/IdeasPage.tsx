@@ -308,7 +308,7 @@ export function IdeasPage({
         <button
           type="button"
           onClick={() => setNonce((n) => n + 1)}
-          className="ml-auto flex h-6 w-6 items-center justify-center rounded text-ink-3 transition-colors hover:bg-white/5 hover:text-ink"
+          className="ml-auto flex h-6 w-6 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-2 hover:text-ink"
           title="刷新列表"
           aria-label="刷新列表"
         >
@@ -547,7 +547,7 @@ function FilterChip({
       onClick={onClick}
       aria-pressed={active}
       className={`inline-flex items-center gap-1 rounded-md px-1.5 py-[3px] text-[10.5px] transition-colors ${
-        active ? 'bg-raised text-ink' : 'text-ink-3 hover:bg-white/[0.03] hover:text-ink-2'
+        active ? 'bg-raised text-ink' : 'text-ink-3 hover:bg-fill-1 hover:text-ink-2'
       }`}
       style={active ? { boxShadow: 'inset 0 0 0 1px var(--color-line-strong)' } : undefined}
     >
@@ -579,7 +579,7 @@ function IdeaRow({
       onClick={onClick}
       aria-current={active ? 'true' : undefined}
       className={`relative block w-full border-b border-line px-3 py-2.5 text-left transition-colors ${
-        active ? 'bg-white/[0.045]' : 'hover:bg-white/[0.025]'
+        active ? 'bg-fill-2' : 'hover:bg-fill-1'
       }`}
     >
       <span

@@ -156,10 +156,15 @@ export const STATUS_META: Record<IdeaStatus, StatusMeta> = {
   },
 };
 
+/**
+ * 所有徽标色一律走 CSS token（`var(--color-…)` / `color-mix`）：
+ * 同一份表在浅色主题下会被 `html[data-theme="light"]` 自动换成压深一档的值，
+ * 否则 #35e7c5 这类亮色放白底上对比度只有 1.5:1，等于看不见。
+ */
 export const KIND_META: Record<ItemKind, { label: string; color: string }> = {
-  paper: { label: '论文', color: '#7aa7f7' },
-  news: { label: '资讯', color: '#9caeb4' },
-  release: { label: '发布', color: '#f2b357' },
+  paper: { label: '论文', color: 'var(--color-info)' },
+  news: { label: '资讯', color: 'var(--color-ink-2)' },
+  release: { label: '发布', color: 'var(--color-warn)' },
 };
 
 /**
@@ -196,37 +201,37 @@ export interface BandMeta {
 export const BAND_META: Record<RecordBand, BandMeta> = {
   unparsed: {
     label: '解析失败',
-    color: '#f2b357',
-    bg: 'rgb(242 179 87 / 0.10)',
-    border: 'rgb(242 179 87 / 0.34)',
+    color: 'var(--color-warn)',
+    bg: 'color-mix(in oklab, var(--color-warn) 10%, transparent)',
+    border: 'color-mix(in oklab, var(--color-warn) 34%, transparent)',
     hint: '页面没取到命中数：本次检索无效，需确认登录态后重跑',
   },
   zero: {
     label: '零命中',
-    color: '#8fa3ad',
-    bg: 'rgb(143 163 173 / 0.10)',
-    border: 'rgb(143 163 173 / 0.28)',
+    color: 'var(--color-ink-3)',
+    bg: 'color-mix(in oklab, var(--color-ink-3) 12%, transparent)',
+    border: 'color-mix(in oklab, var(--color-ink-3) 30%, transparent)',
     hint: '先怀疑检索式（AND 语义，词多即空），不能当作技术空白',
   },
   sparse: {
     label: '稀疏',
-    color: '#35e7c5',
-    bg: 'rgb(53 231 197 / 0.12)',
-    border: 'rgb(53 231 197 / 0.36)',
+    color: 'var(--color-ok)',
+    bg: 'color-mix(in oklab, var(--color-ok) 12%, transparent)',
+    border: 'color-mix(in oklab, var(--color-ok) 36%, transparent)',
     hint: '1–5 命中的交叉带：最值得读权利要求的位置',
   },
   mid: {
     label: '中间',
-    color: '#7aa7f7',
-    bg: 'rgb(122 167 247 / 0.10)',
-    border: 'rgb(122 167 247 / 0.30)',
+    color: 'var(--color-info)',
+    bg: 'color-mix(in oklab, var(--color-info) 10%, transparent)',
+    border: 'color-mix(in oklab, var(--color-info) 30%, transparent)',
     hint: '6–49 命中：数字判不了，要读最近邻权利要求',
   },
   red: {
     label: '红海',
-    color: '#ff6b7a',
-    bg: 'rgb(255 107 122 / 0.10)',
-    border: 'rgb(255 107 122 / 0.32)',
+    color: 'var(--color-danger)',
+    bg: 'color-mix(in oklab, var(--color-danger) 10%, transparent)',
+    border: 'color-mix(in oklab, var(--color-danger) 32%, transparent)',
     hint: '≥50 命中：已成建制布防，规避成本高',
   },
 };
@@ -234,30 +239,30 @@ export const BAND_META: Record<RecordBand, BandMeta> = {
 export const VERDICT_META: Record<NoveltyVerdict, { label: string; color: string; bg: string; border: string; hint: string }> = {
   gap: {
     label: '已验证',
-    color: '#35e7c5',
-    bg: 'rgb(53 231 197 / 0.12)',
-    border: 'rgb(53 231 197 / 0.38)',
+    color: 'var(--color-ok)',
+    bg: 'color-mix(in oklab, var(--color-ok) 12%, transparent)',
+    border: 'color-mix(in oklab, var(--color-ok) 38%, transparent)',
     hint: '人工读完权利要求后确认的技术空白（机器不会自动判 gap）',
   },
   opportunity: {
     label: '机会',
-    color: '#a9e34b',
-    bg: 'rgb(169 227 75 / 0.10)',
-    border: 'rgb(169 227 75 / 0.32)',
+    color: 'var(--color-lime)',
+    bg: 'color-mix(in oklab, var(--color-lime) 12%, transparent)',
+    border: 'color-mix(in oklab, var(--color-lime) 34%, transparent)',
     hint: '有占位但密度有限，可绕开',
   },
   'red-ocean': {
     label: '红海',
-    color: '#ff6b7a',
-    bg: 'rgb(255 107 122 / 0.10)',
-    border: 'rgb(255 107 122 / 0.32)',
+    color: 'var(--color-danger)',
+    bg: 'color-mix(in oklab, var(--color-danger) 10%, transparent)',
+    border: 'color-mix(in oklab, var(--color-danger) 32%, transparent)',
     hint: '命中密集：撞车风险高',
   },
   inconclusive: {
     label: '待判',
-    color: '#f2b357',
-    bg: 'rgb(242 179 87 / 0.10)',
-    border: 'rgb(242 179 87 / 0.34)',
+    color: 'var(--color-warn)',
+    bg: 'color-mix(in oklab, var(--color-warn) 10%, transparent)',
+    border: 'color-mix(in oklab, var(--color-warn) 34%, transparent)',
     hint: '没有有效证据：解析失败或全部零命中，都要先改检索式',
   },
 };

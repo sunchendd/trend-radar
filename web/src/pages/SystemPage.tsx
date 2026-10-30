@@ -22,10 +22,11 @@ import { EmptyState, ErrorState } from '../components/States';
 import { useToastFns } from '../components/Toast';
 import { Pill, Slider, Spinner, Toggle } from '../components/primitives';
 
+// 信源类型色走 token：浅色主题下 info/warn 会自动压深一档，不会在白底上糊掉
 const KIND_COLOR: Record<SourceKind, string> = {
-  arxiv: '#7aa7f7',
-  atom: '#f2b357',
-  rss: '#9caeb4',
+  arxiv: 'var(--color-info)',
+  atom: 'var(--color-warn)',
+  rss: 'var(--color-ink-2)',
 };
 
 export function SystemPage({ liveNonce }: { liveNonce: number }): JSX.Element {
@@ -422,7 +423,7 @@ function RunsTable({ runs, loading }: { runs: RunRecord[]; loading: boolean }): 
               type="button"
               onClick={() => setOpenId(open ? null : run.id)}
               aria-expanded={open}
-              className="grid w-full grid-cols-[1fr_46px_60px_46px_52px_28px] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-white/[0.025]"
+              className="grid w-full grid-cols-[1fr_46px_60px_46px_52px_28px] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-fill-1"
             >
               <span className="flex min-w-0 items-center gap-1.5">
                 <span
@@ -500,7 +501,7 @@ function PerSourceBars({ rows }: { rows: RunPerSource[] }): JSX.Element {
               <span className="num w-[186px] shrink-0 truncate text-[10.5px] text-ink-2" title={row.sourceId}>
                 {row.sourceId}
               </span>
-              <span className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.05]">
+              <span className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-fill-2">
                 <span
                   className="block h-full rounded-full"
                   style={{

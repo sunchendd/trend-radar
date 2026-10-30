@@ -95,3 +95,15 @@ npm run build --workspace web && npm run typecheck --workspace web
 由 `fieldErrorsOf()` 落回对应输入框下方，不只弹 toast。
 
 **快捷键**：`1–5` 切换 论文/新闻/选题/巡检/信源，`,` 打开设置。
+
+
+## 主题（2026-10-30）
+
+浅色是默认皮肤，深色保留。切换入口两个：顶栏太阳/月亮按钮、设置页主题选择——**同一份 state**
+（`web/src/lib/theme.ts`，`useSyncExternalStore` 同步 DOM attr + localStorage + React），不存在两个真相。
+
+- 配色收口到 token：`fill-1/2/3`、`scrim`、`on-accent`、`track`/`track-2`、`lime`；`html[data-theme="light"]`
+  覆写全部颜色与阴影。`bg-white/*`、`bg-black/*`、`text-white` 在 `web/src` 已 grep 归零。
+- 浅色实测对比度：正文 17.8:1、次级 7.4:1、注脚 5.2:1、强调按钮文字 4.9:1；六页可见文本低于 4.5:1 的数量为 0。
+- FOUC：`web/index.html` 的 `<head>` 内联脚本先于模块脚本从 `localStorage['tr-theme']` 恢复主题。
+- `Sparkbars` 修复：历史柱改用淡强调色（原先用 track 色画数据，浅色下读成一个灰色方块＝把"有数据"画成"没有"）；全零时只画基线。

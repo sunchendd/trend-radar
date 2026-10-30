@@ -12,11 +12,12 @@ import { useCallback, useEffect, useMemo, useState, type JSX, type ReactNode } f
 import { fieldErrorsOf, friendlyError, putSettings, toApiError, type ApiError } from '../lib/api';
 import { absTime, relTime } from '../lib/format';
 import { primeSettings, useAppSettings, useTicker } from '../lib/hooks';
+import { useTheme } from '../lib/theme';
 import type { AppSettings, AppSettingsPatch, RefreshMode } from '../lib/types';
 import { Icon } from '../components/Icon';
 import { NoticeBar } from '../components/States';
 import { useToastFns } from '../components/Toast';
-import { Pill, SectionHead, Spinner, Toggle } from '../components/primitives';
+import { Pill, SectionHead, Segmented, Spinner, Toggle } from '../components/primitives';
 
 interface FormState {
   dailyRefreshEnabled: boolean;
@@ -216,6 +217,7 @@ export function SettingsPage({
   const toast = useToastFns();
   const settings = useAppSettings(liveNonce);
   const tick = useTicker(15_000);
+  const { theme, setTheme } = useTheme();
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [base, setBase] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
@@ -400,6 +402,33 @@ export function SettingsPage({
         </section>
       ) : (
         <>
+          {/* 外观（只存本机，不入后端设置） */}
+          <section className="card p-3.5">
+            <SectionHead
+              title="外观"
+              hint="浅色是默认皮肤；选择只记在这台浏览器（localStorage）"
+              right={
+                <span className="text-[10px] text-ink-3">
+                  当前：<span className="text-ink-2">{theme === 'light' ? '浅色' : '深色'}</span>
+                </span>
+              }
+            />
+            <div className="mt-2">
+              <Row label="主题" hint="顶栏右上角的太阳/月亮按钮与此处是同一个状态">
+                <Segmented
+                  options={[
+                    { value: 'light', label: '浅色', icon: 'sun' },
+                    { value: 'dark', label: '深色', icon: 'moon' },
+                  ]}
+                  value={theme}
+                  onChange={(v) => {
+                    if (v) setTheme(v);
+                  }}
+                />
+              </Row>
+            </div>
+          </section>
+
           {/* 采集调度 */}
           <section className="card p-3.5">
             <SectionHead title="采集调度" hint="决定后台多久抓一次、每次抓多少、留多久" />

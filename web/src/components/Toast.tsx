@@ -146,7 +146,7 @@ function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
           type="button"
           onClick={onDismiss}
           aria-label="关闭通知"
-          className="-mt-0.5 -mr-1 h-6 w-6 shrink-0 rounded-md text-ink-3 transition-colors hover:bg-white/5 hover:text-ink"
+          className="-mt-0.5 -mr-1 h-6 w-6 shrink-0 rounded-md text-ink-3 transition-colors hover:bg-fill-2 hover:text-ink"
         >
           <Icon name="x" size={13} className="mx-auto" />
         </button>

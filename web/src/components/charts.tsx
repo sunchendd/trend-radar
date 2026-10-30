@@ -51,7 +51,7 @@ export function ScoreRing({
           <stop offset="100%" stopColor={color} />
         </linearGradient>
       </defs>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1a2428" strokeWidth={stroke} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-track)" strokeWidth={stroke} />
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -112,9 +112,14 @@ export function Sparkbars({
   const n = Math.max(1, data.length);
   const max = Math.max(1, ...data.map((d) => d.count));
   const bw = (width - gap * (n - 1)) / n;
+  const empty = data.every((d) => d.count === 0);
 
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true" className="shrink-0 overflow-visible">
+      {/* 全是 0 时画一条基线：用「轨道色画数据柱」会读成一个灰色方块，等于把"没数据"画成了"有数据" */}
+      {empty ? (
+        <line x1={0} y1={height - 1} x2={width} y2={height - 1} stroke="var(--color-track-2)" strokeWidth={1} />
+      ) : null}
       {data.map((d, i) => {
         const h = Math.max(2, (d.count / max) * (height - 2));
         const last = i === n - 1;
@@ -126,8 +131,9 @@ export function Sparkbars({
               width={bw}
               height={h}
               rx={Math.min(2, bw / 2)}
-              fill={last ? 'var(--color-accent)' : '#2b3a40'}
-              opacity={last ? 0.95 : 0.75}
+              // 历史柱也用强调色（只是更淡）：track 色是"空槽道"，拿它画数据会让人以为没数据
+              fill="var(--color-accent)"
+              opacity={last ? 0.95 : 0.32}
             >
               <title>{`${d.date} · ${d.count} 条`}</title>
             </rect>
@@ -164,8 +170,8 @@ export function ScoreHistogram({
                 style={{
                   height: h,
                   background: active
-                    ? 'linear-gradient(to top, color-mix(in oklab, var(--color-accent) 45%, #0d1517), color-mix(in oklab, var(--color-accent) 85%, #0d1517))'
-                    : '#1c272b',
+                    ? 'linear-gradient(to top, color-mix(in oklab, var(--color-accent) 45%, var(--color-surface)), color-mix(in oklab, var(--color-accent) 88%, var(--color-surface)))'
+                    : 'var(--color-track)',
                 }}
                 title={`${b.bucket} · ${b.count} 条`}
               />
@@ -228,7 +234,7 @@ export function NoveltyBar({ records }: { records: NoveltyRecord[] }): JSX.Eleme
         {/* 轨道 */}
         <div
           className="absolute right-0 left-0"
-          style={{ top: TICK_TOP, height: 2, borderRadius: 2, background: '#243239' }}
+          style={{ top: TICK_TOP, height: 2, borderRadius: 2, background: 'var(--color-track-2)' }}
         />
         {/* 刻度 */}
         {LOG_TICKS.map((t) => (
@@ -297,7 +303,7 @@ export function HitsMeter({ hits }: { hits: number }): JSX.Element {
   const pos = logPos(hits) * 100;
   const meta = BAND_META[bandOf(hits)];
   return (
-    <div className="relative h-[3px] w-full overflow-hidden rounded-full bg-[#1a2428]">
+    <div className="relative h-[3px] w-full overflow-hidden rounded-full bg-track">
       <div
         className="absolute top-0 bottom-0 left-0 rounded-full"
         style={{

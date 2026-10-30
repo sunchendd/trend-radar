@@ -83,7 +83,7 @@ export function ItemCard({
             ) : null}
           </div>
 
-          <h3 className="clamp-2 mt-1.5 text-[13.5px] leading-[1.5] font-medium tracking-[-0.005em] text-ink transition-colors group-hover:text-white">
+          <h3 className="clamp-2 mt-1.5 text-[13.5px] leading-[1.5] font-medium tracking-[-0.005em] text-ink transition-colors group-hover:text-ink">
             {title}
           </h3>
 
@@ -126,7 +126,7 @@ export function ItemCard({
             onClick={(e) => e.stopPropagation()}
             title="打开原文（新标签）"
             aria-label="打开原文"
-            className="flex h-6 w-6 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-white/5 hover:text-accent"
+            className="flex h-6 w-6 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-fill-2 hover:text-accent"
           >
             <Icon name="external" size={13} />
           </a>

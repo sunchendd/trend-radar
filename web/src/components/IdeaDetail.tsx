@@ -117,7 +117,7 @@ export function IdeaDetail({
           </button>
           <span className="inline-flex items-center overflow-hidden rounded-md border border-line">
             <a
-              className="flex h-7 items-center gap-1 bg-white/[0.02] px-2 text-[11.5px] text-ink-2 transition-colors hover:text-ink"
+              className="flex h-7 items-center gap-1 bg-fill-1 px-2 text-[11.5px] text-ink-2 transition-colors hover:text-ink"
               href={`/api/ideas/${idea.id}/disclosure`}
               download
               title="下载交底书 Markdown（九章结构，可直接粘进 Word）"
@@ -126,7 +126,7 @@ export function IdeaDetail({
               交底书 .md
             </a>
             <a
-              className="flex h-7 items-center gap-1 border-l border-line bg-white/[0.02] px-2 text-[11.5px] text-ink-2 transition-colors hover:text-ink"
+              className="flex h-7 items-center gap-1 border-l border-line bg-fill-1 px-2 text-[11.5px] text-ink-2 transition-colors hover:text-ink"
               href={`/api/ideas/${idea.id}/disclosure?format=docx`}
               download
               title="下载 Word 版交底书（.docx，代理人可直接改）"
@@ -234,7 +234,7 @@ export function IdeaDetail({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span
                 className="inline-flex items-center gap-1 rounded-md px-1.5 py-[1px] text-[10.5px] font-medium"
-                style={{ color: verdictMeta.color, background: 'rgb(0 0 0 / 0.22)' }}
+                style={{ color: verdictMeta.color, background: 'var(--color-fill-2)' }}
               >
                 <Icon
                   name={summary.verdict === 'red-ocean' ? 'flame' : summary.verdict === 'inconclusive' ? 'info' : 'shield'}
@@ -282,7 +282,7 @@ export function IdeaDetail({
                           });
                         }}
                         title="点击复制这条建议"
-                        className="group flex w-full items-start gap-1.5 rounded-md px-1 py-[3px] text-left transition-colors hover:bg-white/[0.04]"
+                        className="group flex w-full items-start gap-1.5 rounded-md px-1 py-[3px] text-left transition-colors hover:bg-fill-2"
                       >
                         <span className="num mt-[1px] shrink-0 text-[9.5px] text-ink-3">{i + 1}</span>
                         <span className="text-[11.5px] leading-relaxed text-ink">{s}</span>
@@ -413,7 +413,7 @@ export function IdeaDetail({
                   key={id}
                   type="button"
                   onClick={() => onCite(id)}
-                  className="num inline-flex items-center gap-1 rounded-md border border-line bg-white/[0.02] px-1.5 py-[3px] text-[10.5px] text-ink-2 transition-colors hover:border-accent/40 hover:text-accent"
+                  className="num inline-flex items-center gap-1 rounded-md border border-line bg-fill-1 px-1.5 py-[3px] text-[10.5px] text-ink-2 transition-colors hover:border-accent/40 hover:text-accent"
                   title={`打开情报 ${id}`}
                 >
                   <Icon name="link" size={10} />
@@ -431,7 +431,7 @@ export function IdeaDetail({
 function Field({ index, title, text }: { index: string; title: string; text: string }): JSX.Element {
   return (
     <div className="flex gap-3">
-      <div className="num mt-[2px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-line bg-white/[0.02] text-[9px] text-ink-3">
+      <div className="num mt-[2px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-line bg-fill-1 text-[9px] text-ink-3">
         {index}
       </div>
       <div className="min-w-0 flex-1">

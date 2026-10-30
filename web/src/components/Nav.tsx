@@ -10,6 +10,7 @@ import { BrandMark, Icon, type IconName } from './Icon';
 import { Pill } from './primitives';
 import { demoReasonText } from '../lib/api';
 import type { PageRoute, RouteName } from '../lib/hooks';
+import { useTheme } from '../lib/theme';
 
 const NAV: { name: PageRoute; label: string; icon: IconName; hint: string }[] = [
   { name: 'papers', label: '论文', icon: 'doc', hint: 'arXiv 等论文源，按相关度排序' },
@@ -92,7 +93,7 @@ export function NavRail({
               title={`${item.hint}（${i + 1}）`}
               aria-current={active ? 'page' : undefined}
               className={`group relative flex w-[54px] flex-col items-center gap-1 rounded-xl py-2 transition-colors ${
-                active ? 'text-ink' : 'text-ink-3 hover:bg-white/[0.035] hover:text-ink-2'
+                active ? 'text-ink' : 'text-ink-3 hover:bg-fill-1 hover:text-ink-2'
               }`}
             >
               <span
@@ -123,7 +124,7 @@ export function NavRail({
           onClick={onHelp}
           title="快捷键（?）"
           aria-label="快捷键帮助"
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-white/5 hover:text-ink"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-2 hover:text-ink"
         >
           <Icon name="keyboard" size={15} />
         </button>
@@ -209,6 +210,8 @@ export function TopBar({
 }): JSX.Element {
   const page = pageTitleOf(route);
   const settingsActive = route === 'settings';
+  const { theme, toggle } = useTheme();
+  const nextTheme = theme === 'light' ? '深色' : '浅色';
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/85 backdrop-blur-md">
       <div className="flex h-[52px] items-center gap-3 px-3 md:px-5">
@@ -242,6 +245,15 @@ export function TopBar({
           >
             <Icon name="keyboard" size={13} />
             <span className="hidden lg:inline">?</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label="切换浅色/深色主题"
+            title={`当前${theme === 'light' ? '浅色' : '深色'} · 切换到${nextTheme}`}
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-line text-ink-3 transition-colors hover:border-line-strong hover:text-ink"
+          >
+            <Icon name={theme === 'light' ? 'moon' : 'sun'} size={13} />
           </button>
           {onSettings ? (
             <button

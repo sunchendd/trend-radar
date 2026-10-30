@@ -63,7 +63,7 @@ export function FilterPanel({
             type="button"
             onClick={onReset}
             disabled={active === 0}
-            className="rounded-md px-1.5 py-0.5 text-[10.5px] text-ink-3 transition-colors hover:bg-white/5 hover:text-ink disabled:opacity-35 disabled:hover:bg-transparent"
+            className="rounded-md px-1.5 py-0.5 text-[10.5px] text-ink-3 transition-colors hover:bg-fill-2 hover:text-ink disabled:opacity-35 disabled:hover:bg-transparent"
             title="清除全部筛选"
           >
             清除
@@ -88,7 +88,7 @@ export function FilterPanel({
                     aria-pressed={checked}
                     title={s.note || s.url}
                     className={`flex w-full items-center gap-2 rounded-lg px-1.5 py-[5px] text-left transition-colors ${
-                      checked ? 'bg-white/[0.045]' : 'hover:bg-white/[0.025]'
+                      checked ? 'bg-fill-2' : 'hover:bg-fill-1'
                     }`}
                   >
                     <span

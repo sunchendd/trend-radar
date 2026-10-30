@@ -1,11 +1,27 @@
 <!doctype html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Trend Radar · 技术情报雷达</title>
     <meta name="description" content="聚合 arXiv 与工程信号，产出可查新的中国发明专利选题" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="/favicon.svg" />
+    <!--
+      主题必须在这里恢复，不能等 React：模块脚本加载完再切主题会先渲染一帧默认皮肤（FOUC）。
+      这一小段同步执行，早于下面任何脚本，且失败也必须给出一个合法主题。
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = window.localStorage.getItem('tr-theme');
+          var theme = saved === 'dark' || saved === 'light' ? saved : 'light';
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (err) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

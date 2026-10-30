@@ -7,6 +7,21 @@
 ------------------------------------------------------------------- */
 
 @theme {
+  /* ———————————————————————————————— 语义填充 / 遮罩 / 反色文字
+     「浅色 vs 深色」最容易翻车的两类值单独成 token：
+     填充（hover、chip、行高亮）与遮罩（抽屉/弹窗）。深色下是「加白」，
+     浅色下必须变成「加黑」，否则浅色里 hover 完全看不见。 */
+  --color-fill-1: rgb(255 255 255 / 0.025);
+  --color-fill-2: rgb(255 255 255 / 0.05);
+  --color-fill-3: rgb(255 255 255 / 0.075);
+  /* 遮罩：抽屉 / Modal 背后的压暗层 */
+  --color-scrim: rgb(0 0 0 / 0.65);
+  /* 强调色上的文字（浅色主题里强调色变深，文字要跟着变白） */
+  --color-on-accent: #04231d;
+  /* 图表 / 进度 / 滑块的轨道（不是边框，颜色要更弱） */
+  --color-track: #1a2428;
+  --color-track-2: #243239;
+
   /* —— 背景层级 3 级 —— */
   --color-canvas: #07090a; /* L0 页面底 */
   --color-surface: #0c1113; /* L1 卡片/面板 */
@@ -33,6 +48,8 @@
   --color-warn: #f2b357;
   --color-danger: #ff6b7a;
   --color-info: #7aa7f7;
+  /* 「机会」档的黄绿：和 ok/warn 都太像，单独一个色 */
+  --color-lime: #a9e34b;
 
   /* —— 选题状态色 —— */
   --color-st-draft: #93a5ad;
@@ -56,6 +73,66 @@
   --animate-slide-right: slide-right 0.24s cubic-bezier(0.22, 0.68, 0.32, 1) both;
   --animate-slide-up: slide-up 0.22s cubic-bezier(0.22, 0.68, 0.32, 1) both;
   --animate-spin-slow: spin 1.1s linear infinite;
+}
+
+/* ------------------------------------------------------------------
+   浅色主题：默认皮肤（用户反馈「太黑」）。
+   只覆写**颜色与阴影**，不动 font/radius/animation——布局与间距两套完全一致。
+   强调色在浅底上必须自己够深（#35e7c5 那种亮青绿放白底上对比度只有 1.5:1），
+   所以 accent 单独调深一档，按钮文字改为白色（--color-on-accent）。
+------------------------------------------------------------------- */
+html[data-theme="light"] {
+  color-scheme: light;
+
+  /* 背景：接近白但不刺眼，卡片才是纯白，靠层级拉开 */
+  --color-canvas: #f5f7f8;
+  --color-surface: #ffffff;
+  --color-raised: #eef2f4;
+  --color-sunken: #eaeff1;
+
+  /* 边框 */
+  --color-line: #e1e7ea;
+  --color-line-strong: #b0c0c7;
+
+  /* 文字：正文 #10191c 对白卡 ≈ 17:1；ink-3 也压到 4.9:1，细小注脚可读 */
+  --color-ink: #10191c;
+  --color-ink-2: #46585f;
+  --color-ink-3: #5f7078;
+
+  /* 强调色：深青绿（白底上作为文字/边框也够对比） */
+  /* accent 必须自己够深才撑得住「白字按钮」与「白底上的强调文字」（≥4.5:1） */
+  --color-accent: #0b7f6f;
+  --color-accent-soft: #0a7466;
+  --color-accent-deep: #075c50;
+  --color-accent-ink: #ffffff;
+  --color-on-accent: #ffffff;
+
+  /* 语义色：整体压深一档，避免白底上「糊掉」 */
+  --color-ok: #0b7f6f;
+  --color-warn: #a2650b;
+  --color-danger: #c0364a;
+  --color-info: #2f6bd1;
+  --color-lime: #557a06;
+
+  /* 选题状态色 */
+  --color-st-draft: #64767e;
+  --color-st-verified: #0b7f6f;
+  --color-st-red: #c0364a;
+  --color-st-archived: #97a6ac;
+
+  /* 填充：从「加白」翻成「加黑」 */
+  --color-fill-1: rgb(13 22 26 / 0.03);
+  --color-fill-2: rgb(13 22 26 / 0.06);
+  --color-fill-3: rgb(13 22 26 / 0.09);
+  --color-scrim: rgb(15 25 30 / 0.38);
+
+  /* 轨道 */
+  --color-track: #cbd8dd;
+  --color-track-2: #b8c8ce;
+
+  /* 阴影：浅色下要更淡、更散，否则像脏污 */
+  --shadow-lift: 0 10px 26px -16px rgb(16 25 28 / 0.22);
+  --shadow-pop: 0 22px 56px -22px rgb(16 25 28 / 0.28);
 }
 
 @keyframes rise {
@@ -120,7 +197,7 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   html,
@@ -138,28 +215,42 @@
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    /* 极轻的顶部双色光晕，避免纯黑死板 */
+    /* 极轻的顶部双色光晕，避免底色死板（两套主题各一份，浅色更淡） */
     background-image:
       radial-gradient(
         900px 420px at 18% -8%,
-        rgb(53 231 197 / 0.055),
+        color-mix(in oklab, var(--color-accent) 8%, transparent),
         transparent 70%
       ),
       radial-gradient(
         760px 380px at 88% -12%,
-        rgb(122 167 247 / 0.045),
+        color-mix(in oklab, var(--color-info) 7%, transparent),
         transparent 72%
       );
     background-attachment: fixed;
   }
 
+  html[data-theme="light"] body {
+    background-image:
+      radial-gradient(
+        900px 420px at 18% -8%,
+        color-mix(in oklab, var(--color-accent) 5%, transparent),
+        transparent 70%
+      ),
+      radial-gradient(
+        760px 380px at 88% -12%,
+        color-mix(in oklab, var(--color-info) 4%, transparent),
+        transparent 72%
+      );
+  }
+
   ::selection {
-    background: rgb(53 231 197 / 0.28);
-    color: #fff;
+    background: color-mix(in oklab, var(--color-accent) 26%, transparent);
+    color: var(--color-ink);
   }
 
   :focus-visible {
-    outline: 2px solid rgb(53 231 197 / 0.65);
+    outline: 2px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
     outline-offset: 2px;
     border-radius: 4px;
   }
@@ -175,7 +266,7 @@
   /* 滚动条：细、暗、hover 提亮 */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #26343a transparent;
+    scrollbar-color: var(--color-line-strong) transparent;
   }
   ::-webkit-scrollbar {
     width: 10px;
@@ -185,13 +276,13 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #202c31;
+    background: var(--color-line-strong);
     border-radius: 99px;
     border: 3px solid transparent;
     background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #33454c;
+    background: color-mix(in oklab, var(--color-ink-3) 70%, var(--color-line-strong));
     background-clip: content-box;
   }
 
@@ -264,7 +355,7 @@
     line-height: 1;
     white-space: nowrap;
     color: var(--color-ink-2);
-    background: rgb(255 255 255 / 0.03);
+    background: var(--color-fill-1);
     border: 1px solid var(--color-line);
     font-family: var(--font-mono);
   }
@@ -292,8 +383,8 @@
     user-select: none;
   }
   .btn:hover:not(:disabled) {
-    background: #172125;
-    border-color: #3a4a51;
+    background: color-mix(in oklab, var(--color-ink) 7%, var(--color-raised));
+    border-color: color-mix(in oklab, var(--color-ink-3) 55%, var(--color-line-strong));
   }
   .btn:active:not(:disabled) {
     transform: translateY(0.5px);
@@ -306,9 +397,10 @@
   .btn-accent {
     background: var(--color-accent);
     border-color: var(--color-accent);
-    color: var(--color-accent-ink);
+    /* 浅色主题里 accent 是深青绿、文字要白；深色里反过来 */
+    color: var(--color-on-accent);
     font-weight: 650;
-    box-shadow: 0 6px 20px -10px rgb(53 231 197 / 0.75);
+    box-shadow: 0 6px 20px -10px color-mix(in oklab, var(--color-accent) 75%, transparent);
   }
   .btn-accent:hover:not(:disabled) {
     background: var(--color-accent-soft);
@@ -321,19 +413,19 @@
     color: var(--color-ink-2);
   }
   .btn-ghost:hover:not(:disabled) {
-    background: rgb(255 255 255 / 0.045);
+    background: var(--color-fill-2);
     border-color: var(--color-line);
     color: var(--color-ink);
   }
 
   .btn-danger {
-    background: rgb(255 107 122 / 0.1);
-    border-color: rgb(255 107 122 / 0.32);
-    color: #ff9ba5;
+    background: color-mix(in oklab, var(--color-danger) 10%, transparent);
+    border-color: color-mix(in oklab, var(--color-danger) 32%, transparent);
+    color: color-mix(in oklab, var(--color-danger) 82%, var(--color-ink));
   }
   .btn-danger:hover:not(:disabled) {
-    background: rgb(255 107 122 / 0.18);
-    border-color: rgb(255 107 122 / 0.5);
+    background: color-mix(in oklab, var(--color-danger) 16%, transparent);
+    border-color: color-mix(in oklab, var(--color-danger) 48%, transparent);
   }
 
   .input {
@@ -357,9 +449,9 @@
   }
   .input:focus {
     outline: none;
-    border-color: rgb(53 231 197 / 0.55);
-    background: #060a0b;
-    box-shadow: 0 0 0 3px rgb(53 231 197 / 0.08);
+    border-color: color-mix(in oklab, var(--color-accent) 60%, transparent);
+    background: var(--color-sunken);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 12%, transparent);
   }
 
   .textarea {
@@ -379,8 +471,8 @@
   }
   .textarea:focus {
     outline: none;
-    border-color: rgb(53 231 197 / 0.55);
-    box-shadow: 0 0 0 3px rgb(53 231 197 / 0.08);
+    border-color: color-mix(in oklab, var(--color-accent) 60%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 12%, transparent);
   }
 
   .kbd {
@@ -402,16 +494,22 @@
 
   .skeleton {
     border-radius: 6px;
-    background-color: #10181b;
+    background-color: var(--color-fill-1);
     background-image: linear-gradient(
       100deg,
       transparent 20%,
-      rgb(255 255 255 / 0.055) 40%,
+      var(--color-fill-3) 40%,
       transparent 60%
     );
     background-size: 220% 100%;
     background-repeat: no-repeat;
     animation: shimmer 1.5s linear infinite;
+  }
+
+  /* 浅色下输入框的填充与白卡几乎同色，靠描边把它「框」出来 */
+  html[data-theme="light"] .input,
+  html[data-theme="light"] .textarea {
+    border-color: var(--color-line-strong);
   }
 
   .divider {
@@ -432,7 +530,7 @@
   .range::-webkit-slider-runnable-track {
     height: 3px;
     border-radius: 99px;
-    background: #223035;
+    background: var(--color-track-2);
   }
   .range[style]::-webkit-slider-runnable-track {
     background: transparent;
@@ -445,8 +543,8 @@
     margin-top: -5px;
     border-radius: 50%;
     background: var(--color-accent);
-    border: 2px solid #08120f;
-    box-shadow: 0 0 0 1px rgb(53 231 197 / 0.45);
+    border: 2px solid var(--color-surface);
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 45%, transparent);
     transition: transform 0.12s ease;
   }
   .range:hover::-webkit-slider-thumb {
@@ -455,7 +553,7 @@
   .range::-moz-range-track {
     height: 3px;
     border-radius: 99px;
-    background: #223035;
+    background: var(--color-track-2);
   }
   .range[style]::-moz-range-track {
     background: transparent;
@@ -465,7 +563,7 @@
     height: 11px;
     border-radius: 50%;
     background: var(--color-accent);
-    border: 2px solid #08120f;
+    border: 2px solid var(--color-surface);
   }
 
   .scroll-area {
@@ -485,7 +583,7 @@
     position: absolute;
     inset: -3px;
     border-radius: 50%;
-    background: rgb(53 231 197 / 0.35);
+    background: color-mix(in oklab, var(--color-accent) 35%, transparent);
     animation: pulse-ring 2.4s ease-out infinite;
   }
 

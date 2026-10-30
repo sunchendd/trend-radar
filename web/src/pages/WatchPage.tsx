@@ -30,9 +30,9 @@ import { Pill, Spinner } from '../components/primitives';
 const LEVEL_META: Record<TrendLevel, { label: string; cls: string; hint: string }> = {
   surge: { label: '升温', cls: 'text-warn border-warn/40 bg-warn/10', hint: '有人在同一处布专利，值得据此出选题' },
   'new-front': { label: '新方向', cls: 'text-accent border-accent/40 bg-accent/10', hint: '从 0 变有命中：新方向冒头' },
-  warm: { label: '微升', cls: 'text-ink-2 border-line bg-white/[0.03]', hint: '涨幅未过阈值，继续观察' },
-  flat: { label: '平稳', cls: 'text-ink-3 border-line bg-white/[0.02]', hint: '无显著变化' },
-  cool: { label: '降温', cls: 'text-ink-3 border-line bg-white/[0.02]', hint: '竞争减少，也可能方向过时' },
+  warm: { label: '微升', cls: 'text-ink-2 border-line bg-fill-1', hint: '涨幅未过阈值，继续观察' },
+  flat: { label: '平稳', cls: 'text-ink-3 border-line bg-fill-1', hint: '无显著变化' },
+  cool: { label: '降温', cls: 'text-ink-3 border-line bg-fill-1', hint: '竞争减少，也可能方向过时' },
   baseline: { label: '基线', cls: 'text-ink-3 border-dashed border-line', hint: '首次巡检，下次才有环比' },
 };
 

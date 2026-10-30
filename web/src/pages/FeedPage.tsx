@@ -421,7 +421,7 @@ export function FeedPage({
                   searchRef.current?.focus();
                 }}
                 aria-label="清空搜索"
-                className="absolute top-1/2 right-1.5 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-ink-3 hover:bg-white/5 hover:text-ink"
+                className="absolute top-1/2 right-1.5 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-ink-3 hover:bg-fill-2 hover:text-ink"
               >
                 <Icon name="x" size={12} />
               </button>
@@ -612,7 +612,7 @@ export function FeedPage({
               type="button"
               onClick={resetFilters}
               disabled={activeCount === 0}
-              className="ml-auto rounded-md px-1.5 py-0.5 text-[10.5px] text-ink-3 transition-colors hover:bg-white/5 hover:text-ink disabled:opacity-35"
+              className="ml-auto rounded-md px-1.5 py-0.5 text-[10.5px] text-ink-3 transition-colors hover:bg-fill-2 hover:text-ink disabled:opacity-35"
             >
               清除
             </button>

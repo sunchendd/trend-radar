@@ -29,7 +29,7 @@ export interface PillProps {
 export function Pill({
   children,
   color = 'var(--color-ink-2)',
-  bg = 'rgb(255 255 255 / 0.04)',
+  bg = 'var(--color-fill-2)',
   border = 'var(--color-line)',
   mono = false,
   title,
@@ -94,7 +94,9 @@ export function Toggle({ checked, onChange, disabled = false, label }: TogglePro
         disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'
       }`}
       style={{
-        background: checked ? 'color-mix(in oklab, var(--color-accent) 24%, #0b1416)' : '#131c1f',
+        background: checked
+          ? 'color-mix(in oklab, var(--color-accent) 78%, var(--color-surface))'
+          : 'color-mix(in oklab, var(--color-ink-3) 38%, var(--color-surface))',
         borderColor: checked ? 'color-mix(in oklab, var(--color-accent) 55%, transparent)' : 'var(--color-line-strong)',
       }}
     >
@@ -271,7 +273,7 @@ export function IconButton({
       className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
         active
           ? 'border-line-strong bg-raised text-ink'
-          : 'border-transparent text-ink-3 hover:border-line hover:bg-white/[0.04] hover:text-ink'
+          : 'border-transparent text-ink-3 hover:border-line hover:bg-fill-2 hover:text-ink'
       } ${disabled ? 'cursor-not-allowed opacity-40' : ''} ${className}`}
     >
       <Icon name={icon} size={size} />

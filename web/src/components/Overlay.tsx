@@ -60,7 +60,7 @@ export function Drawer({ open, onClose, label, children, width = 560, header, fo
   return (
     <div className="fixed inset-0 z-[60]" role="presentation">
       <div
-        className="animate-fade absolute inset-0 bg-black/62 backdrop-blur-[2px]"
+        className="animate-fade absolute inset-0 bg-scrim backdrop-blur-[2px]"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -101,7 +101,7 @@ export function Modal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="presentation">
-      <div className="animate-fade absolute inset-0 bg-black/65 backdrop-blur-[3px]" onClick={onClose} aria-hidden="true" />
+      <div className="animate-fade absolute inset-0 bg-scrim backdrop-blur-[3px]" onClick={onClose} aria-hidden="true" />
       <div
         ref={panelRef}
         role="dialog"

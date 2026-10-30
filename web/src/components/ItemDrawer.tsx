@@ -122,7 +122,7 @@ export function ItemDrawer({
                     <span className="num text-[10.5px] text-ink-3">{r.rule}</span>
                     <span className="text-[11.5px] leading-snug text-ink-2">{cleanReason(r.detail)}</span>
                   </div>
-                  <div className="mt-1.5 h-[2px] w-full overflow-hidden rounded-full bg-[#182226]">
+                  <div className="mt-1.5 h-[2px] w-full overflow-hidden rounded-full bg-track">
                     <div
                       className="h-full rounded-full"
                       style={{

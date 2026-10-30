@@ -35,7 +35,9 @@ export type IconName =
   | 'flask'
   | 'table'
   | 'shield-off'
-  | 'circle-slash';
+  | 'circle-slash'
+  | 'sun'
+  | 'moon';
 
 const PATHS: Record<IconName, string[]> = {
   feed: ['M4 5.5h16', 'M4 12h16', 'M4 18.5h11'],
@@ -72,6 +74,18 @@ const PATHS: Record<IconName, string[]> = {
   flask: ['M10 3.5h4', 'M11 3.5v5.2L5.9 18a2 2 0 0 0 1.7 3h8.8a2 2 0 0 0 1.7-3L13 8.7V3.5', 'M7.6 14h8.8'],
   table: ['M3.5 5.5h17v13h-17z', 'M3.5 10h17', 'M9.5 10v8.5'],
   'shield-off': ['M12 3.2 5 6v6.2c0 4.2 2.85 7.4 7 8.8 4.15-1.4 7-4.6 7-8.8V6l-7-2.8Z', 'M9.5 9.5l5 5', 'M14.5 9.5l-5 5'],
+  sun: [
+    'M12 16.4a4.4 4.4 0 1 0 0-8.8 4.4 4.4 0 0 0 0 8.8Z',
+    'M12 2.6v2.2',
+    'M12 19.2v2.2',
+    'M4.4 4.4l1.6 1.6',
+    'M18 18l1.6 1.6',
+    'M2.6 12h2.2',
+    'M19.2 12h2.2',
+    'M4.4 19.6L6 18',
+    'M18 6l1.6-1.6',
+  ],
+  moon: ['M20.5 14.4A8.6 8.6 0 0 1 9.6 3.5a8.6 8.6 0 1 0 10.9 10.9Z'],
   'circle-slash': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z', 'M6 18 18 6'],
 };
 
