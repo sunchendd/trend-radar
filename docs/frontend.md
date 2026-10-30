@@ -78,3 +78,20 @@ npm run build --workspace web && npm run typecheck --workspace web
 底部 Tab 四项齐全（情报流 / 选题 / 巡检 / 信源）。
 
 ![移动端选题工作台](screens/mobile.png)
+
+
+## 论文/新闻拆分 + 设置页（2026-10-30）
+
+**路由**：`#/papers`（默认）·`#/news`·`#/ideas`·`#/watch`·`#/system`·`#/settings`。旧 `#/feed` 由 `parseHash` 用
+`location.replace` 重写为 `#/papers`（不新增历史记录、不白屏）。`RouteName` 里**不再保留** `'feed'` 别名——
+留一个永远不会被返回的名字只会让人误用（本轮已把 `IdeasPage` 的 `navigate('feed')` 改成 `'papers'`）。
+
+**两页各自的 KPI 口径**：论文页 `kind=paper`，新闻页 `kinds=news,release`（三类 `kind` 互不重叠，所以
+「按 kind 分别取 total 再相加」是精确值，不是估算）。阈值来自 `/api/settings` 的 `highScore`/`midScore`，
+`StatBar` 接收可选 `highScore`/`midScore`，缺省回落常量——避免「≥70 的标签配 ≥80 的数字」。
+
+**设置页**：`refreshMode` 三态（daily / interval / off）直接由后端给，前端不再自己推导；
+`llm.apiKey` 只显示 `hasApiKey`，输入框留空 = 不改；后端 `400 validation_error` 的 `detail.fields[]`
+由 `fieldErrorsOf()` 落回对应输入框下方，不只弹 toast。
+
+**快捷键**：`1–5` 切换 论文/新闻/选题/巡检/信源，`,` 打开设置。

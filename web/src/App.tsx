@@ -11,8 +11,10 @@ import { ToastProvider } from './components/Toast';
 import { subscribeEvents, type StreamEvent } from './lib/api';
 import { useDemoMode, useHashRoute, useHotkeys, type RouteName } from './lib/hooks';
 import type { IdeaWithVerdict } from './lib/types';
-import { FeedPage } from './pages/FeedPage';
 import { IdeasPage } from './pages/IdeasPage';
+import { NewsPage } from './pages/NewsPage';
+import { PapersPage } from './pages/PapersPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { SystemPage } from './pages/SystemPage';
 import { WatchPage } from './pages/WatchPage';
 
@@ -52,9 +54,12 @@ export function App(): JSX.Element {
 
   useHotkeys(
     [
-      { key: '1', run: () => go('feed') },
-      { key: '2', run: () => go('ideas') },
-      { key: '3', run: () => go('system') },
+      { key: '1', run: () => go('papers') },
+      { key: '2', run: () => go('news') },
+      { key: '3', run: () => go('ideas') },
+      { key: '4', run: () => go('watch') },
+      { key: '5', run: () => go('system') },
+      { key: ',', run: () => go('settings') },
       { key: '?', run: () => setHelpOpen((v) => !v) },
     ],
     !helpOpen,
@@ -83,17 +88,21 @@ export function App(): JSX.Element {
             demo={demo}
             stream={stream}
             onHelp={() => setHelpOpen(true)}
+            onSettings={() => go('settings')}
           />
 
           {demo ? <DemoBanner /> : null}
 
           <main id="main" tabIndex={-1} className="min-w-0 flex-1 pb-14 outline-none md:pb-0">
-            {route.name === 'feed' ? (
-              <FeedPage
-                route={route}
-                demo={demo}
+            {route.name === 'papers' ? (
+              <PapersPage route={route} demo={demo} liveNonce={live.nonce} onHelp={() => setHelpOpen(true)} />
+            ) : route.name === 'news' ? (
+              <NewsPage route={route} demo={demo} liveNonce={live.nonce} onHelp={() => setHelpOpen(true)} />
+            ) : route.name === 'settings' ? (
+              <SettingsPage
                 liveNonce={live.nonce}
-                onHelp={() => setHelpOpen(true)}
+                onBack={() => go('papers')}
+                onSaved={() => setLive((prev) => ({ ...prev, nonce: prev.nonce + 1 }))}
               />
             ) : route.name === 'ideas' ? (
               <IdeasPage route={route} navigate={go} liveNonce={live.nonce} liveIdea={live.idea} />

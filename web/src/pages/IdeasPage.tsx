@@ -507,7 +507,7 @@ export function IdeasPage({
                 onStatus={(s) => void changeStatus(s)}
                 onSubmitNovelty={submitNovelty}
                 onAutoNovelty={() => void onAutoNovelty()}
-                onCite={(id) => navigate('feed', { item: id })}
+                onCite={(id) => navigate('papers', { item: id })}
                 {...(wide ? {} : { onBack: () => setSelectedId(null) })}
               />
             ) : (

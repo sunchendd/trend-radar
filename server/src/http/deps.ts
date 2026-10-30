@@ -32,11 +32,20 @@
  * ==================================================================================
  */
 import type { AppConfig } from '../config.js';
+import {
+  applySettingsToConfig,
+  readSettings,
+  resolveSettings,
+  settingsUpdatedAt,
+  writeSettings,
+} from '../store/settings.js';
 import type { VerdictSummary } from '../ideas/verdict.js';
 import type { Watch } from '../store/watches.js';
 import type { IdeaCluster } from '../ideas/cluster.js';
 import type { SweepOptions, SweepResult } from '../sweep.js';
 import type {
+  AppSettings,
+  AppSettingsPatch,
   GenerateIdeasRequest,
   Idea,
   IdeaStatus,
@@ -139,6 +148,14 @@ export interface HttpDeps {
 
   /** LLM 是否可用：判定规则只认 ideas/llm.ts，HTTP 层不再复制一份 */
   isLlmConfigured(): boolean;
+
+  /**
+   * 生效设置（config 默认值 ← settings 表覆盖）。**不含明文 apiKey**，只给 hasApiKey。
+   * `nextRefreshAt` 由路由按调度规则填，这里给 null。
+   */
+  getSettings(): AppSettings;
+  /** 合并写入并返回最新生效设置；`llm.apiKey` 传空串 = 不改 */
+  updateSettings(patch: AppSettingsPatch): AppSettings;
 
   /**
    * 查新判读的**唯一出口**：前端不该自己复制一份阈值逻辑。
@@ -273,6 +290,14 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
       }
     : {};
 
+  /**
+   * 运行时生效配置：每次调用都读一次 settings 表，所以设置页改完立刻作用于
+   * 采集/生成，不必重启进程。读几行 key/value 的开销可以忽略。
+   */
+  const effectiveConfig = (): AppConfig => applySettingsToConfig(config, readSettings(db as DatabaseSync));
+  const snapshotSettings = (): AppSettings =>
+    resolveSettings(config, readSettings(db as DatabaseSync), settingsUpdatedAt(db as DatabaseSync));
+
   /** 写入查新记录后按 verdict.ts 重算状态；archived 是人工结论，不被自动翻案 */
   const rejudge = (idea: Idea): Idea => {
     if (idea.status === 'archived') return idea;
@@ -322,7 +347,7 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
       }
       let records: NoveltyRecord[];
       try {
-        records = await runNovelty(config, { queries: idea.queries, title: idea.title }, queries);
+        records = await runNovelty(effectiveConfig(), { queries: idea.queries, title: idea.title }, queries);
       } catch (cause) {
         // CLI 不可用 = 配置问题（503）；其它异常按真实故障冒泡成 500，别伪装成「未配置」
         throw mapDomainError(cause) ?? cause;
@@ -344,10 +369,11 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
     },
     sweepWatches: async (options) => {
       const sweep = (await import('../sweep.js')).sweepWatches;
-      return sweep(config, db as DatabaseSync, options ?? {});
+      return sweep(effectiveConfig(), db as DatabaseSync, options ?? {});
     },
     stats: () => q.stats(db),
-    runCollect: (cfg, opts) => runCollect(cfg, opts),
+    // 传入的 cfg 只是兜底：真正生效的配置以 settings 覆盖后的为准
+    runCollect: (_cfg, opts) => runCollect(effectiveConfig(), opts),
     generateIdeas: async (req) => {
       if (!generateIdeas) {
         throw serviceUnavailable('pipeline_unavailable', '选题流水线未就绪（ideas/pipeline.ts 需导出 generateIdeas）');
@@ -357,7 +383,7 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
         ? q.getItemsByIds(db, req.itemIds)
         : q.listItems(db, { sort: 'score', limit: maxInputItems, offset: 0 }).items;
       try {
-        const result = await generateIdeas(config, req, items, {
+        const result = await generateIdeas(effectiveConfig(), req, items, {
           existing: q.listIdeas(db),
           ...(options.llm ? { llm: options.llm } : {}),
         });
@@ -376,8 +402,14 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
       : {}),
     isLlmConfigured:
       llmModule && typeof llmModule.isLlmConfigured === 'function'
-        ? () => (llmModule.isLlmConfigured as (config: AppConfig) => boolean)(config)
+        ? () => (llmModule.isLlmConfigured as (config: AppConfig) => boolean)(effectiveConfig())
         : () => true,
+
+    getSettings: snapshotSettings,
+    updateSettings: (patch) => {
+      writeSettings(db as DatabaseSync, patch);
+      return snapshotSettings();
+    },
 
     close: () => {
       try {

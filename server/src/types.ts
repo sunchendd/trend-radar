@@ -179,6 +179,8 @@ export interface ItemQuery {
   q?: string;
   sourceId?: string;
   kind?: ItemKind;
+  /** 多选类型：论文视图只传 ['paper']，新闻视图传 ['news','release'] */
+  kinds?: ItemKind[];
   minScore?: number;
   since?: string;
   sort?: 'score' | 'time';
@@ -202,4 +204,63 @@ export interface GenerateIdeasRequest {
 
 export interface ApiError {
   error: { code: string; message: string; detail?: unknown };
+}
+
+
+/**
+ * 运行时设置（设置页可改，覆盖 env 默认值）。
+ *
+ * 落库在 settings 表（key/value JSON），启动时叠加到 config 上。
+ * 安全约定：**API Key 永不回传明文**，只回传 `hasApiKey`；写入时才传 `apiKey`。
+ */
+export interface AppSettings {
+  /** 每天定时刷新时刻 "HH:mm"（服务器本地时区） */
+  dailyRefreshAt: string;
+  /** 定时刷新开关；关闭时回落到 `collectMinutes` 间隔（0 = 不自动采集） */
+  dailyRefreshEnabled: boolean;
+  /** 间隔采集（分钟），仅在没有开启每日定时时有意义 */
+  collectMinutes: number;
+  /** 每次每源抓取上限 */
+  limitPerSource: number;
+  /** 低于该分数不入库 */
+  minKeepScore: number;
+  /** 条目保留天数 */
+  ttlDays: number;
+  /** KPI 高分线 */
+  highScore: number;
+  /** KPI 待判线 */
+  midScore: number;
+  llm: {
+    baseUrl: string;
+    model: string;
+    /** 是否已配置 key（不回传明文） */
+    hasApiKey: boolean;
+  };
+  novelty: {
+    command: string;
+    hasCommand: boolean;
+  };
+  /** 上次保存时间（ISO）；从未保存过为 null */
+  updatedAt: string | null;
+  /** 下一次定时刷新的时间（ISO）；未启用为 null */
+  nextRefreshAt: string | null;
+  /**
+   * 当前靠什么在定时刷新：`daily` 每日定点 / `interval` 间隔采集 / `off` 不自动采集。
+   * 前端要区分「明天 08:00 再来」和「每 360 分钟一次」，只看 nextRefreshAt 分不出来。
+   */
+  refreshMode: 'daily' | 'interval' | 'off';
+}
+
+/** PUT /api/settings 的入参：全部可选，只改传了的字段 */
+export interface AppSettingsPatch {
+  dailyRefreshAt?: string;
+  dailyRefreshEnabled?: boolean;
+  collectMinutes?: number;
+  limitPerSource?: number;
+  minKeepScore?: number;
+  ttlDays?: number;
+  highScore?: number;
+  midScore?: number;
+  llm?: { baseUrl?: string; model?: string; apiKey?: string };
+  novelty?: { command?: string };
 }

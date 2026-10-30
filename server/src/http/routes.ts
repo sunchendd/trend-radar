@@ -8,9 +8,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppConfig } from '../config.js';
 import type { VerdictSummary } from '../ideas/verdict.js';
-import type { Idea, Item, ItemQuery, NoveltyRecord, RunRecord } from '../types.js';
+import type { AppSettings, AppSettingsPatch, Idea, Item, ItemQuery, NoveltyRecord, RunRecord } from '../types.js';
+import { nextRunAt, refreshModeOf, type Scheduler } from '../scheduler.js';
 import type { HttpDeps } from './deps.js';
-import { notFound, parse, serviceUnavailable } from './errors.js';
+import { ApiException, notFound, parse, serviceUnavailable } from './errors.js';
 import type { SseHub } from './sse.js';
 import { disclosureFilename, toDisclosureMarkdown } from '../ideas/disclosure.js';
 import { buildDocx } from '../ideas/docx.js';
@@ -34,12 +35,41 @@ const optionalString = (schema: z.ZodType<string>): z.ZodType<string | undefined
 
 const idParams = z.object({ id: z.string().trim().min(1).max(128) });
 
+const ITEM_KINDS = ['paper', 'news', 'release'] as const;
+type ItemKindName = (typeof ITEM_KINDS)[number];
+
+/** `kinds=news,release`：多选筛选，空串/空数组都表示不过滤；非法值点名报错 */
+const kindsQuerySchema = z.preprocess(
+  emptyToUndefined,
+  z
+    .string()
+    .max(200)
+    .transform((raw, ctx) => {
+      const parts = raw
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => part !== '');
+      const invalid = parts.filter((part) => !(ITEM_KINDS as readonly string[]).includes(part));
+      if (invalid.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `非法值 ${invalid.join(',')}，只能是 ${ITEM_KINDS.join('|')}`,
+        });
+        return z.NEVER;
+      }
+      return [...new Set(parts)] as ItemKindName[];
+    })
+    .optional(),
+) as z.ZodType<ItemKindName[] | undefined>;
+
 const itemsQuerySchema = z.object({
   q: optionalString(z.string().trim().min(1).max(200)),
   sourceId: optionalString(z.string().trim().min(1).max(128)),
+  // 单值 kind 保留（老前端/curl 习惯），与 kinds 合并成一份去重数组
   kind: z
     .enum(['paper', 'news', 'release'], { errorMap: () => ({ message: '只能是 paper|news|release' }) })
     .optional(),
+  kinds: kindsQuerySchema,
   minScore: optionalNumber(0, 100),
   since: optionalString(z.string().refine((value) => !Number.isNaN(Date.parse(value)), '必须是 ISO 8601 日期')),
   sort: z.enum(['score', 'time'], { errorMap: () => ({ message: '只能是 score 或 time' }) }).optional().default('score'),
@@ -58,6 +88,34 @@ const ideasQuerySchema = z.object({
 const exportQuerySchema = z.object({
   format: z.enum(['csv', 'json'], { errorMap: () => ({ message: '只能是 csv 或 json' }) }).optional().default('csv'),
 });
+
+const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const settingsPatchSchema = z
+  .object({
+    dailyRefreshAt: z.string().trim().regex(HHMM_PATTERN, '必须是 HH:mm（00:00–23:59）').optional(),
+    dailyRefreshEnabled: z.boolean().optional(),
+    collectMinutes: z.number().int().min(0).max(10_080, '最多 10080 分钟（7 天）').optional(),
+    limitPerSource: z.number().int().min(1).max(200).optional(),
+    minKeepScore: z.number().min(0).max(100).optional(),
+    ttlDays: z.number().int().min(1).max(3650).optional(),
+    highScore: z.number().min(0).max(100).optional(),
+    midScore: z.number().min(0).max(100).optional(),
+    llm: z
+      .object({
+        baseUrl: z.string().trim().max(500).optional(),
+        model: z.string().trim().max(120).optional(),
+        // 空串 = 不改（设置页拿不到明文 key，用户没重填时提交的就是空串）
+        apiKey: z.string().trim().max(500).optional(),
+      })
+      .optional(),
+    novelty: z.object({ command: z.string().trim().max(500).optional() }).optional(),
+  })
+  .refine((body) => Object.keys(body).length > 0, { message: '至少提供一个可修改字段' })
+  .refine((body) => body.midScore === undefined || body.highScore === undefined || body.midScore <= body.highScore, {
+    message: 'midScore 不能大于 highScore',
+    path: ['midScore'],
+  });
 
 const collectBodySchema = z.object({
   sourceIds: z.array(z.string().trim().min(1).max(128)).min(1).max(50).optional(),
@@ -186,6 +244,8 @@ export interface RouteContext {
   deps: HttpDeps;
   hub: SseHub;
   collect: CollectorFn;
+  /** 采集调度器；buildApp（测试/无定时场景）下为 undefined */
+  scheduler?: Scheduler;
   version: string;
   startedAt: number;
 }
@@ -201,10 +261,48 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
 
   app.get('/api/stats', async () => deps.stats());
 
+  /**
+   * 下一次刷新时刻是「设置 + 当前时间」的纯函数结果，所以即使没有调度器
+   * （buildApp 不装定时器）也能如实算给前端看。
+   */
+  const withNextRefresh = (settings: AppSettings): AppSettings => ({
+    ...settings,
+    nextRefreshAt: nextRunAt(settings, new Date())?.toISOString() ?? null,
+    // 模式和时间必须同源推导，别信调用方传进来的旧值
+    refreshMode: refreshModeOf(settings),
+  });
+
+  app.get('/api/settings', async () => withNextRefresh(deps.getSettings()));
+
+  app.put('/api/settings', async (req) => {
+    const patch = parse(settingsPatchSchema, req.body ?? {}) as AppSettingsPatch;
+    const current = deps.getSettings();
+    const midScore = patch.midScore ?? current.midScore;
+    const highScore = patch.highScore ?? current.highScore;
+    // 只改一半时 zod 的交叉校验看不到另一半，这里按「合并后」再校一次
+    if (midScore > highScore) {
+      throw new ApiException(400, 'validation_error', `midScore: 不能大于 highScore（${midScore} > ${highScore}）`, {
+        fields: [{ field: 'midScore', message: '不能大于 highScore' }],
+      });
+    }
+
+    const saved = withNextRefresh(deps.updateSettings(patch));
+    // 立即重排：改完不用重启，也不用等下个周期
+    ctx.scheduler?.reschedule(saved);
+    app.log.info(
+      { dailyRefreshEnabled: saved.dailyRefreshEnabled, dailyRefreshAt: saved.dailyRefreshAt, nextRefreshAt: saved.nextRefreshAt },
+      '采集计划已更新',
+    );
+    return saved;
+  });
+
   app.get('/api/items', async (req) => {
-    const query = parse(itemsQuerySchema, req.query);
+    const { kind, kinds, ...query } = parse(itemsQuerySchema, req.query);
+    // 两个参数可能同时出现：合并去重后只按 kinds 过滤，避免出现 `kind=? AND kind IN (...)` 的矛盾条件
+    const mergedKinds = [...new Set<ItemKindName>([...(kinds ?? []), ...(kind ? [kind] : [])])];
     const itemQuery: ItemQuery = {
       ...query,
+      kinds: mergedKinds,
       limit: query.limit ?? DEFAULT_LIMIT,
       offset: query.offset ?? 0,
     };

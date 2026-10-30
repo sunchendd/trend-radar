@@ -2,9 +2,18 @@
  * 自定义 hook 集合。全部基于 React 自带能力，不引入状态库。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { getStats, isDemo, listItems, subscribeDemo, toApiError, type ApiError } from './api';
-import { HIGH_SCORE, MID_SCORE } from './format';
-import type { Stats } from './types';
+import {
+  getSettings,
+  getStats,
+  isDemo,
+  listItems,
+  subscribeDemo,
+  toApiError,
+  type ApiError,
+} from './api';
+import { fetchFeed, type FeedFilters, type FeedPage, type SortKey } from './feed';
+import { HIGH_SCORE, MID_SCORE, todayIso } from './format';
+import type { AppSettings, Item, ItemKind, ItemQuery, Stats } from './types';
 
 // ------------------------------------------------------------------ 基础
 
@@ -39,19 +48,35 @@ export function useDemoMode(): boolean {
 
 // ------------------------------------------------------------------ 路由（hash）
 
-export type RouteName = 'feed' | 'ideas' | 'watch' | 'system';
+/**
+ * 路由名。
+ *
+ * 情报流已拆成 `papers` / `news` 两页；旧链接 `#/feed` 由 `parseHash` 重写成 `#/papers`，
+ * 所以这里不再保留 `'feed'` 别名——留一个"永远不被返回的名字"只会让人误用。
+ */
+export type RouteName = 'papers' | 'news' | 'ideas' | 'watch' | 'system' | 'settings';
+
+/** 兼容旧代码的别名（等价于 RouteName） */
+export type PageRoute = RouteName;
 
 export interface Route {
   name: RouteName;
   params: URLSearchParams;
 }
 
-const ROUTE_NAMES: RouteName[] = ['feed', 'ideas', 'watch', 'system'];
+const ROUTE_NAMES: PageRoute[] = ['papers', 'news', 'ideas', 'watch', 'system', 'settings'];
+
+/** 旧 hash 别名：`#/feed` 是历史书签（情报流拆成论文/资讯两页之前），不能白屏 */
+const LEGACY_ROUTES: Record<string, PageRoute> = { feed: 'papers' };
+
+function hashPath(hash: string): string {
+  return hash.replace(/^#\/?/, '').split('?')[0] ?? '';
+}
 
 function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, '');
   const [pathPart = '', queryPart = ''] = raw.split('?');
-  const name = ROUTE_NAMES.find((n) => n === pathPart) ?? 'feed';
+  const name = ROUTE_NAMES.find((n) => n === pathPart) ?? LEGACY_ROUTES[pathPart] ?? 'papers';
   return { name, params: new URLSearchParams(queryPart) };
 }
 
@@ -65,6 +90,17 @@ export function useHashRoute(): {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  // 旧书签 #/feed → 就地改写成 #/papers（location.replace，不新增历史记录）
+  useEffect(() => {
+    const path = hashPath(window.location.hash);
+    const target = LEGACY_ROUTES[path];
+    if (!target) return;
+    const query = window.location.hash.includes('?') ? window.location.hash.slice(window.location.hash.indexOf('?')) : '';
+    const url = `${window.location.pathname}${window.location.search}#/${target}${query}`;
+    window.location.replace(url);
+    setHash(`#/${target}${query}`);
+  }, [hash]);
 
   const route = useMemo(() => parseHash(hash), [hash]);
 
@@ -291,6 +327,201 @@ export function useScoreBands(intervalMs = 30_000, refreshKey = 0): ScoreBands {
   }, [intervalMs, refreshKey]);
 
   return state;
+}
+
+// ------------------------------------------------------------------ 论文 / 新闻：按类型分区的取数
+
+export type ScopeMode = 'papers' | 'news';
+
+/**
+ * 两个页面各自的类型口径。
+ * 论文页只查 `kind=paper`；资讯页查 `kinds=news,release`（GitHub Releases 与博客
+ * 在库里是两种 kind，但对用户是同一件事：工程信号）。
+ */
+export const SCOPE_KINDS: Record<ScopeMode, ItemKind[]> = {
+  papers: ['paper'],
+  news: ['news', 'release'],
+};
+
+export const SCOPE_LABEL: Record<ScopeMode, { title: string; kinds: string; empty: string }> = {
+  papers: { title: '论文', kinds: '论文源（arXiv）', empty: '论文库' },
+  news: { title: '新闻', kinds: 'Releases + 博客', empty: '资讯库' },
+};
+
+function sortItems(sort: SortKey, a: Item, b: Item): number {
+  if (sort === 'time') return Date.parse(b.publishedAt) - Date.parse(a.publishedAt);
+  return b.score - a.score || Date.parse(b.publishedAt) - Date.parse(a.publishedAt);
+}
+
+/**
+ * 按类型分区取数。
+ *
+ * `kind` 与 `kinds` 是**互斥的两类分区**：paper / news / release 彼此不重叠，
+ * 所以「每个 kind 各取一段、合并后排序、切出第 offset..offset+limit 段」的
+ * total 就是各分区之和，分页语义与单 kind 完全一致（不需要跨分区去重）。
+ *
+ * TODO(下一轮)：`ItemQuery.kinds` 已能一路发到后端（api.ts 已拼 `kinds=a,b`），
+ * 等 feed.ts 的 toItemQuery 支持 kinds 后，这里可以塌缩成一次请求。
+ */
+export async function fetchScopedFeed(
+  filters: FeedFilters,
+  kinds: ItemKind[],
+  limit: number,
+  offset: number,
+): Promise<FeedPage> {
+  const first = kinds[0];
+  if (kinds.length <= 1) {
+    return fetchFeed({ ...filters, kind: first ?? null }, limit, offset);
+  }
+  const need = offset + limit;
+  const pages = await Promise.all(kinds.map((k) => fetchFeed({ ...filters, kind: k }, need, 0)));
+  const all: Item[] = [];
+  for (const p of pages) all.push(...p.items);
+  all.sort((a, b) => sortItems(filters.sort, a, b));
+  return {
+    items: all.slice(offset, offset + limit),
+    total: pages.reduce((sum, p) => sum + p.total, 0),
+    limit,
+    offset,
+    merged: pages.some((p) => p.merged),
+  };
+}
+
+// ------------------------------------------------------------------ 分页面的 KPI
+
+export interface ScoreThresholds {
+  high: number;
+  mid: number;
+}
+
+export interface ScopedKpi {
+  /** 该页口径下的条目总数 */
+  items: number;
+  /** 今天新增（同口径） */
+  today: number;
+  /** 近 7 天新增（同口径） */
+  week: number;
+  /** ≥ high 分 */
+  high: number;
+  /** [mid, high) 待判 */
+  mid: number;
+  loading: boolean;
+}
+
+/**
+ * 论文页 / 新闻页各自的 KPI。
+ *
+ * 不能直接拿 `/api/stats`：它是全库口径，两页混着看会得出错误结论
+ * （「今天新增 90」里大部分是另一类）。这里全部用同一条 `kinds` 过滤去要 total
+ * （limit=1，只取计数），四个数才自洽。
+ */
+export function useScopedKpi(
+  kinds: ItemKind[],
+  thresholds: ScoreThresholds,
+  intervalMs = 30_000,
+  refreshKey = 0,
+): ScopedKpi {
+  const [state, setState] = useState<ScopedKpi>({ items: 0, today: 0, week: 0, high: 0, mid: 0, loading: true });
+  const key = kinds.join(',');
+  const { high, mid } = thresholds;
+
+  useEffect(() => {
+    let cancelled = false;
+    const scopeKinds = key.split(',').filter((k) => k !== '') as ItemKind[];
+
+    /**
+     * 只取计数（limit=1）。多个 kind 时**按 kind 分别数再相加**——
+     * 三种 kind 互不重叠，求和就是精确总量；等后端 `kinds` 参数上线后
+     * 这里可以退化成单次带 `kinds` 的请求。
+     */
+    const countFor = async (extra: ItemQuery): Promise<number> => {
+      if (scopeKinds.length <= 1) {
+        return (await listItems({ ...extra, kind: scopeKinds[0], limit: 1, offset: 0 })).total;
+      }
+      const parts = await Promise.all(
+        scopeKinds.map((k) => listItems({ ...extra, kind: k, limit: 1, offset: 0 })),
+      );
+      return parts.reduce((sum, p) => sum + p.total, 0);
+    };
+
+    const load = async () => {
+      try {
+        const [all, today, week, hi, midAll] = await Promise.all([
+          countFor({}),
+          countFor({ since: todayIso() }),
+          countFor({ since: new Date(Date.now() - 7 * 86_400_000).toISOString() }),
+          countFor({ minScore: high }),
+          countFor({ minScore: mid }),
+        ]);
+        if (cancelled) return;
+        setState({
+          items: all,
+          today,
+          week,
+          high: hi,
+          mid: Math.max(0, midAll - hi),
+          loading: false,
+        });
+      } catch {
+        if (!cancelled) setState((prev) => ({ ...prev, loading: false }));
+      }
+    };
+    void load();
+    const t = setInterval(() => void load(), intervalMs);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [key, high, mid, intervalMs, refreshKey]);
+
+  return state;
+}
+
+// ------------------------------------------------------------------ 运行时设置（/api/settings）
+
+export interface SettingsState {
+  data: AppSettings | null;
+  error: ApiError | null;
+  loading: boolean;
+  refresh: () => void;
+}
+
+/** 进程内缓存：同一会话里切页不必重复拉设置（保存后由 SettingsPage 回写） */
+let settingsMemo: { data: AppSettings | null; at: number } = { data: null, at: 0 };
+
+export function primeSettings(next: AppSettings): void {
+  settingsMemo = { data: next, at: Date.now() };
+}
+
+export function useAppSettings(refreshKey = 0): SettingsState {
+  const [data, setData] = useState<AppSettings | null>(settingsMemo.data);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [loading, setLoading] = useState(settingsMemo.data === null);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(settingsMemo.data === null);
+    getSettings()
+      .then((next) => {
+        if (cancelled) return;
+        primeSettings(next);
+        setData(next);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(toApiError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey, nonce]);
+
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  return { data, error, loading, refresh };
 }
 
 // ------------------------------------------------------------------ 很久没更新的提示

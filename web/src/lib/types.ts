@@ -175,6 +175,8 @@ export interface ItemQuery {
   q?: string;
   sourceId?: string;
   kind?: ItemKind;
+  /** 多选类型（后端 `kinds=news,release`）；与单值 kind 二选一，非空时优先 */
+  kinds?: ItemKind[];
   minScore?: number;
   since?: string;
   sort?: 'score' | 'time';
@@ -248,4 +250,60 @@ export interface IdeaClusterSummary {
   size: number;
   ideaIds: string[];
   titles: string[];
+}
+
+// ---------------------------------------------------------------- 运行时设置（与 server/src/types.ts 同步）
+
+export type RefreshMode = 'daily' | 'interval' | 'off';
+
+export interface AppSettings {
+  /** 每天定时刷新时刻 "HH:mm"（服务器本地时区） */
+  dailyRefreshAt: string;
+  /** 定时刷新开关；关闭时回落到 `collectMinutes` 间隔（0 = 不自动采集） */
+  dailyRefreshEnabled: boolean;
+  /**
+   * 采集调度模式：**权威口径，前端直接用，不要自己推导**
+   * （后端已处理「每日时刻非法 → 回落到 interval/off」这类时序细节）。
+   */
+  refreshMode: RefreshMode;
+  /** 间隔采集（分钟），仅在没有开启每日定时时有意义 */
+  collectMinutes: number;
+  /** 每次每源抓取上限 */
+  limitPerSource: number;
+  /** 低于该分数不入库 */
+  minKeepScore: number;
+  /** 条目保留天数 */
+  ttlDays: number;
+  /** KPI 高分线 */
+  highScore: number;
+  /** KPI 待判线 */
+  midScore: number;
+  llm: {
+    baseUrl: string;
+    model: string;
+    /** 是否已配置 key（不回传明文） */
+    hasApiKey: boolean;
+  };
+  novelty: {
+    command: string;
+    hasCommand: boolean;
+  };
+  /** 上次保存时间（ISO）；从未保存过为 null */
+  updatedAt: string | null;
+  /** 下一次定时刷新的时间（ISO）；未启用为 null */
+  nextRefreshAt: string | null;
+}
+
+/** PUT /api/settings 的入参：全部可选，只改传了的字段 */
+export interface AppSettingsPatch {
+  dailyRefreshAt?: string;
+  dailyRefreshEnabled?: boolean;
+  collectMinutes?: number;
+  limitPerSource?: number;
+  minKeepScore?: number;
+  ttlDays?: number;
+  highScore?: number;
+  midScore?: number;
+  llm?: { baseUrl?: string; model?: string; apiKey?: string };
+  novelty?: { command?: string };
 }

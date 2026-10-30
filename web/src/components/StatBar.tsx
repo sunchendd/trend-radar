@@ -52,6 +52,8 @@ function Tile({
 export function StatBar({
   stats,
   bands,
+  highScore = HIGH_SCORE,
+  midScore = MID_SCORE,
   loading,
   lastRun,
   collecting,
@@ -60,6 +62,9 @@ export function StatBar({
 }: {
   stats: Stats | null;
   bands: ScoreBands;
+  /** 生效阈值（来自 /api/settings）；不传则回落到内置常量 */
+  highScore?: number;
+  midScore?: number;
   loading: boolean;
   lastRun: RunRecord | null;
   collecting: boolean;
@@ -88,7 +93,7 @@ export function StatBar({
         }
       />
       <Tile
-        label={`高分 ≥${HIGH_SCORE}`}
+        label={`高分 ≥${highScore}`}
         icon="flame"
         value={high === null ? '—' : fmtInt(high)}
         unit="条"
@@ -96,7 +101,9 @@ export function StatBar({
         foot={
           <>
             待判 <span className="num text-ink-2">{bands.loading ? '…' : fmtInt(bands.mid)}</span>
-            <span className="text-ink-3/80">（{MID_SCORE}–{HIGH_SCORE}）</span>
+            <span className="text-ink-3/80">
+              （{midScore}–{highScore}）
+            </span>
           </>
         }
       />

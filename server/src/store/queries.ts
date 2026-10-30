@@ -377,6 +377,11 @@ function buildItemWhere(query: ItemQuery): WhereClause {
     clauses.push('kind = ?');
     params.push(query.kind);
   }
+  // 多选：空数组表示「不按类型过滤」（前端清空筛选时传 []），不能拼出 `kind IN ()` 这种非法 SQL
+  if (query.kinds !== undefined && query.kinds.length > 0) {
+    clauses.push(`kind IN (${query.kinds.map(() => '?').join(', ')})`);
+    params.push(...query.kinds);
+  }
   if (query.minScore !== undefined && Number.isFinite(query.minScore)) {
     clauses.push('score >= ?');
     params.push(query.minScore);

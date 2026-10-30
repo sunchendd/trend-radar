@@ -1,5 +1,9 @@
 /**
- * 情报流：统计 → 搜索/筛选 → 卡片流 → 详情抽屉。
+ * 情报流（论文 / 新闻共用）：统计 → 搜索/筛选 → 卡片流 → 详情抽屉。
+ *
+ * `scope` 决定这一页**只看哪一类条目**：
+ *   papers → kind=paper；news → kinds=news,release（Releases 与博客都属于工程信号）。
+ * 页面的 KPI 也按同一口径统计，避免把两类混在一起看（那样「今天新增」永远对不上）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import {
@@ -12,23 +16,24 @@ import {
   toApiError,
   type ApiError,
 } from '../lib/api';
+import { DEFAULT_FILTERS, activeFilterCount, type FeedFilters } from '../lib/feed';
+import { runDuration, todayIso } from '../lib/format';
 import {
-  DEFAULT_FILTERS,
-  activeFilterCount,
-  fetchFeed,
-  type FeedFilters,
-} from '../lib/feed';
-import { runDuration } from '../lib/format';
-import {
+  SCOPE_KINDS,
+  SCOPE_LABEL,
+  fetchScopedFeed,
   replaceHashParam,
+  useAppSettings,
   useDebouncedValue,
   useHotkeys,
   useMediaQuery,
-  useScoreBands,
+  useScopedKpi,
   useStats,
   type Route,
+  type ScopeMode,
 } from '../lib/hooks';
-import type { Item, RunRecord, Source } from '../lib/types';
+import { HIGH_SCORE, MID_SCORE } from '../lib/format';
+import type { Item, RunRecord, Source, Stats } from '../lib/types';
 import { FilterPanel } from '../components/FilterPanel';
 import { Icon } from '../components/Icon';
 import { ItemCard } from '../components/ItemCard';
@@ -44,11 +49,14 @@ const LIMIT = 20;
 
 export function FeedPage({
   route,
+  scope,
   demo,
   liveNonce,
   onHelp,
 }: {
   route: Route;
+  /** 本页的类型口径：论文 / 新闻 */
+  scope: ScopeMode;
   demo: boolean;
   liveNonce: number;
   onHelp: () => void;
@@ -56,6 +64,8 @@ export function FeedPage({
   const toast = useToastFns();
   const wide = useMediaQuery('(min-width: 1280px)');
   const statsState = useStats(30_000);
+  const scopeKinds = SCOPE_KINDS[scope];
+  const label = SCOPE_LABEL[scope];
 
   const [filters, setFilters] = useState<FeedFilters>(() => ({
     ...DEFAULT_FILTERS,
@@ -96,8 +106,36 @@ export function FeedPage({
   const listTopRef = useRef<HTMLDivElement | null>(null);
   const reqId = useRef(0);
 
-  // 高分 / 待判两个精确计数（随非零 nonce 一起刷新）
-  const bands = useScoreBands(30_000, nonce);
+  // 本页口径的 KPI（论文页 / 新闻页各自统计，不混全库口径）
+  const settingsState = useAppSettings();
+  const thresholds = useMemo(
+    () => ({
+      high: settingsState.data?.highScore ?? HIGH_SCORE,
+      mid: settingsState.data?.midScore ?? MID_SCORE,
+    }),
+    [settingsState.data?.highScore, settingsState.data?.midScore],
+  );
+  const kpi = useScopedKpi(scopeKinds, thresholds, 30_000, nonce);
+  const bands = useMemo(() => ({ high: kpi.high, mid: kpi.mid, loading: kpi.loading }), [kpi.high, kpi.mid, kpi.loading]);
+  /**
+   * StatBar 拿的是 Stats 对象，这里把「本页口径」的条目数塞进去：
+   * items / 今日新增 / 近 7 天 都换成当前 kind 口径，信源数与直方图仍是全库事实
+   * （它们本来就是系统级信息，跟 kind 无关）。
+   */
+  const scopedStats: Stats | null = useMemo(() => {
+    const base = statsState.stats;
+    if (!base) return null;
+    const rest = Math.max(0, kpi.week - kpi.today);
+    return {
+      ...base,
+      items: kpi.items,
+      // todayAdded 取最后一项、weekAdded 求和 → 用「过去几天」垫一行再放今天
+      dailyAdded: [
+        { date: '更早', count: rest },
+        { date: todayIso(), count: kpi.today },
+      ],
+    };
+  }, [statsState.stats, kpi.items, kpi.week, kpi.today]);
 
   const filterKey = useMemo(
     () =>
@@ -119,7 +157,7 @@ export function FeedPage({
     setLoading(true);
     const offset = mode === 'pages' ? page * LIMIT : 0;
     const id = ++reqId.current;
-    fetchFeed(effective, LIMIT, offset)
+    fetchScopedFeed(effective, scopeKinds, LIMIT, offset)
       .then((res) => {
         if (cancelled || id !== reqId.current) return;
         setItems(res.items);
@@ -139,7 +177,7 @@ export function FeedPage({
     return () => {
       cancelled = true;
     };
-  }, [mode, page, nonce, effective]);
+  }, [scope, page, nonce, effective, scopeKinds]);
 
   // 筛选条件变化 → 回到第一页
   useEffect(() => {
@@ -164,7 +202,7 @@ export function FeedPage({
     setLoadingMore(true);
     const id = ++reqId.current;
     try {
-      const res = await fetchFeed(effective, LIMIT, items.length);
+      const res = await fetchScopedFeed(effective, scopeKinds, LIMIT, items.length);
       if (id !== reqId.current) return;
       setItems((prev) => {
         const seen = new Set(prev.map((p) => p.id));
@@ -177,7 +215,7 @@ export function FeedPage({
     } finally {
       if (id === reqId.current) setLoadingMore(false);
     }
-  }, [effective, items.length]);
+  }, [effective, items.length, scopeKinds]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -261,9 +299,17 @@ export function FeedPage({
     setFilters({ ...DEFAULT_FILTERS, q: '' });
   }, []);
 
-  const patchFilters = useCallback((patch: Partial<FeedFilters>) => {
-    setFilters((prev) => ({ ...prev, ...patch }));
-  }, []);
+  const patchFilters = useCallback(
+    (patch: Partial<FeedFilters>) => {
+      // 本页已经固定在某一类条目上，类型筛选在这里没有意义（会被页面口径覆盖）
+      if (patch.kind !== undefined) {
+        toast.info(`本页只看${label.title}`, `类型已锁定为${label.kinds}；想看另一类请切到对应的页面。`);
+        return;
+      }
+      setFilters((prev) => ({ ...prev, ...patch }));
+    },
+    [label.kinds, label.title, toast],
+  );
 
   const toggleMode = useCallback(() => {
     setMode((m) => {
@@ -323,14 +369,27 @@ export function FeedPage({
     <div className="mx-auto flex w-full max-w-[1240px] gap-4 px-3 py-3.5 md:px-5 md:py-4">
       <div className="min-w-0 flex-1">
         <StatBar
-          stats={statsState.stats}
+          stats={scopedStats}
           bands={bands}
+          highScore={thresholds.high}
+          midScore={thresholds.mid}
           loading={statsState.loading}
           lastRun={lastRun}
           collecting={collecting}
           onCollect={() => void onCollect()}
           onExport={onExport}
         />
+
+        {/* 口径说明：把这一页的统计边界写清楚，避免和全库口径混淆 */}
+        <p className="mt-1.5 text-[10px] leading-relaxed text-ink-3/85">
+          本页口径：<span className="text-ink-2">{label.kinds}</span> · 高分 ≥
+          <span className="num text-ink-2">{thresholds.high}</span> · 待判{' '}
+          <span className="num text-ink-2">
+            {thresholds.mid}–{thresholds.high}
+          </span>{' '}
+          · 「今日新增 / 近 7 天」只数本页口径下今天 / 近 7 天<strong className="font-medium text-ink-2">发布</strong>
+          的条目，不与全库混合
+        </p>
 
         {/* 搜索 + 工具条 */}
         <div className="mt-3 flex items-center gap-2">
@@ -350,8 +409,8 @@ export function FeedPage({
                 }
               }}
               className="input h-9 pr-[52px] pl-8 text-[12.5px]"
-              placeholder="搜索标题 / 摘要 / 关键词…"
-              aria-label="搜索情报"
+              placeholder={`在${label.empty}里搜索标题 / 摘要 / 关键词…`}
+              aria-label={`搜索${label.title}`}
               spellCheck={false}
             />
             {rawQ ? (
@@ -447,7 +506,7 @@ export function FeedPage({
             activeCount > 0 ? (
               <EmptyState
                 icon="filter"
-                title="没有符合条件的情报"
+                title={`没有符合条件的${label.title}`}
                 hint="试着放宽相关度阈值或时间范围；也可以清除全部筛选看看全库。"
                 action={
                   <button type="button" className="btn" onClick={resetFilters}>
@@ -459,8 +518,8 @@ export function FeedPage({
             ) : (
               <EmptyState
                 icon="antenna"
-                title="库里还没有情报"
-                hint="点右上角「一键采集」抓取一次；或在「信源与日志」里添加新的 arXiv / RSS 源。"
+                title={`${label.empty}里还没有条目`}
+                hint={`点上方「一键采集」抓一次；或在「信源」里添加${label.kinds}源。`}
                 action={
                   <button type="button" className="btn btn-accent" onClick={() => void onCollect()} disabled={collecting}>
                     {collecting ? <Spinner size={13} /> : <Icon name="refresh" size={13} />}

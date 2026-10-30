@@ -8,6 +8,8 @@
  * 3. 生产构建里没有任何兜底分支，连不上就是错误态。
  */
 import type {
+  AppSettings,
+  AppSettingsPatch,
   GenerateIdeasRequest,
   IdeaWithVerdict,
   IdeaClusterSummary,
@@ -30,6 +32,7 @@ export type ApiErrorCode =
   | 'timeout'
   | 'bad_response'
   | 'not_found'
+  | 'invalid'
   | 'llm_not_configured'
   | 'novelty_not_configured'
   | 'unknown';
@@ -97,6 +100,14 @@ export function friendlyError(err: unknown): FriendlyError {
       offline: false,
     };
   }
+  if (e.code === 'invalid') {
+    return {
+      title: '设置未保存',
+      hint: '有字段没通过校验（时刻格式 / 分数区间 / TTL 范围），按输入框下面的提示改一下再存。',
+      code: e.code,
+      offline: false,
+    };
+  }
   if (e.code === 'novelty_not_configured') {
     return {
       title: '智慧芽 CLI 未配置',
@@ -106,6 +117,40 @@ export function friendlyError(err: unknown): FriendlyError {
     };
   }
   return { title: e.message || '请求失败', code: e.code, offline: false };
+}
+
+/**
+ * 从 400 `validation_error` 的 detail 里提取「字段 → 消息」。
+ *
+ * 后端形状（已实测）：`{ fields: [{ field: 'dailyRefreshAt', message: '…' }] }`；
+ * 顺手兼容 zod 的 `{ issues: [{ path: ['midScore'], message }] }`。
+ * 结构不认识就返回空对象，调用方退回整表提示——不猜。
+ */
+export function fieldErrorsOf(detail: unknown, known: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const match = (raw: unknown): string | undefined => {
+    if (typeof raw !== 'string') return undefined;
+    const lower = raw.toLowerCase();
+    return known.find((k) => k.toLowerCase() === lower || lower.endsWith(k.toLowerCase()));
+  };
+  const visit = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    const message = typeof obj.message === 'string' ? obj.message : undefined;
+    const rawPath = obj.path ?? obj.paths ?? obj.field;
+    const parts = Array.isArray(rawPath) ? rawPath : typeof rawPath === 'string' ? [rawPath] : [];
+    for (const part of parts) {
+      const hit = match(part);
+      if (hit && message) out[hit] = message;
+    }
+    for (const value of Object.values(obj)) visit(value);
+  };
+  visit(detail);
+  return out;
 }
 
 // ------------------------------------------------------------------ 演示模式
@@ -139,7 +184,7 @@ function enterDemo(reason: string): void {
 // ------------------------------------------------------------------ 底层请求
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   timeout?: number;
   /** 仅 DEV 生效；请求没连上后端时用它兜底并进入演示模式 */
@@ -237,11 +282,15 @@ function errorFromBody(parsed: unknown, status: number): ApiError {
             ? 'novelty_not_configured'
             : status === 404
               ? 'not_found'
-              : 'unknown';
+              : status === 400 || status === 422
+                ? 'invalid'
+                : 'unknown';
       return new ApiError(mapped, message, status, obj.detail ?? null);
     }
   }
-  return new ApiError(status === 404 ? 'not_found' : 'unknown', `HTTP ${status}`, status);
+  const fallbackCode: ApiErrorCode =
+    status === 404 ? 'not_found' : status === 400 || status === 422 ? 'invalid' : 'unknown';
+  return new ApiError(fallbackCode, `HTTP ${status}`, status);
 }
 
 function castFallback<T>(fallback: () => unknown, path: string): T {
@@ -289,13 +338,22 @@ export function listItems(query: ItemQuery): Promise<Paged<Item>> {
       q: query.q,
       sourceId: query.sourceId,
       kind: query.kind,
+      kinds: query.kinds && query.kinds.length > 0 ? query.kinds.join(',') : undefined,
       minScore: query.minScore,
       since: query.since,
       sort: query.sort,
       limit: query.limit,
       offset: query.offset,
     })}`,
-    { fallback: () => mock.mockItems(query) },
+    {
+      fallback: () => {
+        const page = mock.mockItems({ ...query, kind: query.kind, kinds: undefined });
+        if (!query.kinds || query.kinds.length === 0) return page;
+        // 演示数据在本地做 kinds 过滤，保持与真实接口同语义（total 也要一起缩）
+        const items = page.items.filter((it) => query.kinds?.includes(it.kind));
+        return { ...page, items, total: items.length };
+      },
+    },
   );
 }
 
@@ -476,6 +534,96 @@ export function autoNovelty(ideaId: string, queries?: string[]): Promise<IdeaWit
       if (!idea) throw new ApiError('not_found', '选题不存在', 404);
       return idea;
     },
+  });
+}
+
+// ------------------------------------------------------------------ 运行时设置
+
+/**
+ * 演示模式下的设置。只会在 DEV 且后端连不上时出现（那时整个应用已进入演示模式，
+ * 顶部挂「演示数据」徽标），保存只改内存，不写库、不假装成功。
+ */
+const DEMO_SETTINGS: AppSettings = {
+  dailyRefreshAt: '06:30',
+  dailyRefreshEnabled: true,
+  collectMinutes: 360,
+  limitPerSource: 40,
+  minKeepScore: 0,
+  ttlDays: 180,
+  highScore: 70,
+  midScore: 50,
+  refreshMode: 'daily',
+  llm: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', hasApiKey: false },
+  novelty: { command: 'zhihuiya', hasCommand: false },
+  updatedAt: null,
+  nextRefreshAt: null,
+};
+
+let demoSettings: AppSettings | null = null;
+
+function currentDemoSettings(): AppSettings {
+  demoSettings ??= { ...DEMO_SETTINGS, nextRefreshAt: demoNextRefresh(DEMO_SETTINGS.dailyRefreshAt) };
+  return demoSettings;
+}
+
+/** 演示数据里的「下次刷新」：和 scheduler 同口径（今天已过就顺延到明天） */
+function demoNextRefresh(hhmm: string): string | null {
+  const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour > 23 || minute > 59) return null;
+  const next = new Date();
+  next.setHours(hour, minute, 0, 0);
+  if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1);
+  return next.toISOString();
+}
+
+function applyDemoSettingsPatch(patch: AppSettingsPatch): AppSettings {
+  const prev = currentDemoSettings();
+  const next: AppSettings = {
+    ...prev,
+    ...(patch.dailyRefreshAt !== undefined ? { dailyRefreshAt: patch.dailyRefreshAt } : {}),
+    ...(patch.dailyRefreshEnabled !== undefined ? { dailyRefreshEnabled: patch.dailyRefreshEnabled } : {}),
+    ...(patch.collectMinutes !== undefined ? { collectMinutes: patch.collectMinutes } : {}),
+    ...(patch.limitPerSource !== undefined ? { limitPerSource: patch.limitPerSource } : {}),
+    ...(patch.minKeepScore !== undefined ? { minKeepScore: patch.minKeepScore } : {}),
+    ...(patch.ttlDays !== undefined ? { ttlDays: patch.ttlDays } : {}),
+    ...(patch.highScore !== undefined ? { highScore: patch.highScore } : {}),
+    ...(patch.midScore !== undefined ? { midScore: patch.midScore } : {}),
+    llm: {
+      baseUrl: patch.llm?.baseUrl ?? prev.llm.baseUrl,
+      model: patch.llm?.model ?? prev.llm.model,
+      hasApiKey: patch.llm?.apiKey ? true : prev.llm.hasApiKey,
+    },
+    novelty: {
+      command: patch.novelty?.command ?? prev.novelty.command,
+      hasCommand: (patch.novelty?.command ?? prev.novelty.command).trim() !== '',
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  // 与后端同一个三态口径（演示数据没有 scheduler，只能本地按同一规则推一次）
+  next.refreshMode = next.dailyRefreshEnabled ? 'daily' : next.collectMinutes > 0 ? 'interval' : 'off';
+  next.nextRefreshAt =
+    next.refreshMode === 'daily'
+      ? demoNextRefresh(next.dailyRefreshAt)
+      : next.refreshMode === 'interval'
+        ? new Date(Date.now() + next.collectMinutes * 60_000).toISOString()
+        : null;
+  demoSettings = next;
+  return { ...next };
+}
+
+export function getSettings(): Promise<AppSettings> {
+  return request('/api/settings', { fallback: () => ({ ...currentDemoSettings() }) });
+}
+
+export function putSettings(patch: AppSettingsPatch): Promise<AppSettings> {
+  return request('/api/settings', {
+    method: 'PUT',
+    body: patch,
+    timeout: 15_000,
+    fallback: () => applyDemoSettingsPatch(patch),
   });
 }
 

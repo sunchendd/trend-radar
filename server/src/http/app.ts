@@ -19,6 +19,7 @@ import type { AppConfig } from '../config.js';
 import { loadDeps, type HttpDeps } from './deps.js';
 import { toApiError } from './errors.js';
 import { createCollector, registerRoutes, type CollectorFn } from './routes.js';
+import { startScheduler, type Scheduler } from '../scheduler.js';
 import { SseHub } from './sse.js';
 
 /** 与 package.json 同号；rootDir 限制不能直接 import 仓库根的 package.json */
@@ -34,6 +35,16 @@ export interface BuildAppOptions {
   logLevel?: string;
   /** 静态目录；null = 不注册静态托管；缺省 = 仓库里的 web/dist */
   distDir?: string | null;
+  /**
+   * 调度器工厂：`startServer` 用它把定时采集接上，并把实例交回路由
+   * （PUT /api/settings 保存后要立即 reschedule）。`buildApp` 不传 = 不装定时器。
+   */
+  schedulerFactory?: (input: {
+    app: FastifyInstance;
+    config: AppConfig;
+    deps: HttpDeps;
+    collect: CollectorFn;
+  }) => Scheduler | undefined;
 }
 
 const requireFromHere = createRequire(import.meta.url);
@@ -62,6 +73,7 @@ interface AppBundle {
   app: FastifyInstance;
   hub: SseHub;
   collect: CollectorFn;
+  scheduler: Scheduler | undefined;
 }
 
 async function createApp(config: AppConfig, options: BuildAppOptions): Promise<AppBundle> {
@@ -108,22 +120,26 @@ async function createApp(config: AppConfig, options: BuildAppOptions): Promise<A
   });
 
   const collect = createCollector(config, deps, hub);
+  const scheduler = options.schedulerFactory?.({ app, config, deps, collect });
   registerRoutes(app, {
     config,
     deps,
     hub,
     collect,
+    scheduler,
     version: SERVER_VERSION,
     startedAt: Date.now(),
   });
 
   app.addHook('onClose', async () => {
     app.log.debug({ sseClients: hub.size }, '关闭 SSE 订阅');
+    // 先停调度：否则关库之后定时器还可能醒来跑一轮采集
+    scheduler?.stop();
     hub.close();
     if (ownsDeps) deps.close();
   });
 
-  return { app, hub, collect };
+  return { app, hub, collect, scheduler };
 }
 
 export async function buildApp(config: AppConfig, options: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -138,28 +154,37 @@ export interface ServerHandle {
 }
 
 export async function startServer(config: AppConfig, options: BuildAppOptions = {}): Promise<ServerHandle> {
-  const { app, collect } = await createApp(config, options);
+  type FactoryInput = Parameters<NonNullable<BuildAppOptions['schedulerFactory']>>[0];
+  const schedulerFactory =
+    options.schedulerFactory ??
+    ((input: FactoryInput) =>
+      startScheduler({
+        config: input.config,
+        settings: input.deps.getSettings(),
+        run: () => input.collect(),
+        // 定时采集失败只记日志：一次网络抖动不该带走常驻进程
+        onError: (error: unknown) => input.app.log.error({ err: error }, '定时采集失败'),
+      }));
+
+  // 设置页里保存后要「立即生效」，所以调度器必须在组装阶段就接进路由
+  const { app, scheduler } = await createApp(config, { ...options, schedulerFactory });
 
   const url = await app.listen({ port: config.port, host: config.host });
-  app.log.info({ url, dataDir: config.dataDir, collectMinutes: config.collectMinutes }, 'trend-radar API 已启动');
-
-  let timer: NodeJS.Timeout | undefined;
-  if (config.collectMinutes > 0) {
-    timer = setInterval(() => {
-      // 定时采集失败只记日志：一次网络抖动不该带走常驻进程
-      collect().catch((error: unknown) => app.log.error({ err: error }, '定时采集失败'));
-    }, config.collectMinutes * 60_000);
-    // unref：定时器不该阻止进程自然退出（也让 --test 之类的场景能干净收尾）
-    timer.unref();
-  }
+  app.log.info(
+    {
+      url,
+      dataDir: config.dataDir,
+      nextRefreshAt: scheduler?.nextAt()?.toISOString() ?? null,
+    },
+    'trend-radar API 已启动',
+  );
 
   let closing: Promise<void> | null = null;
   const close = (): Promise<void> => {
     if (closing) return closing;
     closing = (async () => {
-      if (timer) clearInterval(timer);
-      timer = undefined;
       removeSignalHandlers();
+      // app.close() 的 onClose 会 stop() 调度器、关 SSE、关 sqlite
       await app.close();
     })();
     return closing;

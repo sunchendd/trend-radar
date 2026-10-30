@@ -10,12 +10,15 @@ Base: `http://127.0.0.1:8787`，全部 `Content-Type: application/json`（SSE �
 |---|---|---|
 | GET | `/api/health` | `{ ok: true, version, uptimeSec }`，用于探活/部署检查 |
 | GET | `/api/stats` | `Stats`：条目数、选题数、源数量、最近一次采集、近 7 天每日新增、相关度直方图 |
+| GET | `/api/items?kinds=news,release` | 同单值 `kind`，`kinds` 为逗号分隔多选（论文页 `kind=paper`，新闻页 `kinds=news,release`）；非法值 400 |
 | GET | `/api/items` | 分页查询条目，参数见下，返回 `Paged<Item>` |
 | GET | `/api/items/:id` | 单条详情 `Item`，404 时走错误格式 |
 | GET | `/api/sources` | `Source[]`，含 `enabled`/`weight`/`note` |
 | GET | `/api/ideas/clusters?status=` | — | 选题按技术方向聚类：`[{id,label,sharedTerms,size,ideaIds,titles}]`（阈值 0.22，见 `ideas/cluster.ts`） |
 | GET | `/api/ideas` | `Idea[]`，按 `updatedAt` 倒序；`?status=` 可过滤 |
 | GET | `/api/ideas/:id` | 单条选题 `Idea` |
+| GET | `/api/settings` | — | 运行时设置：`dailyRefreshAt`/`dailyRefreshEnabled`/`collectMinutes`/`limitPerSource`/`minKeepScore`/`ttlDays`/`highScore`/`midScore`/`llm{baseUrl,model,hasApiKey}`/`novelty{command,hasCommand}`/`updatedAt`/`nextRefreshAt`/`refreshMode`。**API Key 永不回传明文**，只给 `hasApiKey` |
+| PUT | `/api/settings` | `AppSettingsPatch` | 只改传了的字段；`llm.apiKey` 传空串 = 不改；保存后**立即重排定时器**（无需重启）。`dailyRefreshAt` 非 `HH:mm`、`midScore>highScore`、`ttlDays` 越界 → 400 `validation_error`（`detail.fields[]` 指明字段） |
 | GET | `/api/runs?limit=20` | 最近运行记录；`perSource` 为每源 `{sourceId,ms,items,error?}`（v2 起；老记录无此字段） |
 | GET | `/api/export?format=csv\|json` | 导出条目（csv 列：score,kind,title,url,sourceId,publishedAt） |
 | GET | `/api/ideas/:id/disclosure?format=md\|docx` | 导出该选题的**专利交底书**（默认 md 走 `text/markdown`；`docx` 走 OOXML；均为 attachment，九章结构；查新记录如实转录，`0（零命中）` 与 `解析失败` 分开标注） |

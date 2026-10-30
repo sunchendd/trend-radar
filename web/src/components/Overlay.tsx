@@ -127,8 +127,9 @@ export function HelpOverlay({ open, onClose }: { open: boolean; onClose: () => v
     { keys: ['/'], desc: '聚焦搜索框' },
     { keys: ['g'], desc: '切换「加载更多 / 分页」模式' },
     { keys: ['f'], desc: '展开或收起筛选器' },
-    { keys: ['c'], desc: '一键采集（情报流）' },
-    { keys: ['1', '2', '3'], desc: '切换 情报流 / 选题工作台 / 信源与日志' },
+    { keys: ['c'], desc: '一键采集（论文 / 新闻页）' },
+    { keys: ['1', '2', '3', '4', '5'], desc: '切换 论文 / 新闻 / 选题 / 巡检 / 信源' },
+    { keys: [','], desc: '打开设置' },
     { keys: ['Esc'], desc: '关闭抽屉、浮层或退出输入' },
     { keys: ['?'], desc: '打开这份快捷键帮助' },
   ];

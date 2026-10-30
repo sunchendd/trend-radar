@@ -19,7 +19,7 @@ import { openDb } from '../src/store/db.js';
 import { insertItems, upsertIdea } from '../src/store/queries.js';
 import type { VerdictSummary } from '../src/ideas/verdict.js';
 import { unprocessable } from '../src/http/errors.js';
-import type { ApiError, Idea, Item, RunRecord, Source, Stats } from '../src/types.js';
+import type { ApiError, AppSettings, Idea, Item, RunRecord, Source, Stats } from '../src/types.js';
 
 // ---------------------------------------------------------------- fixtures
 
@@ -101,6 +101,23 @@ const STATS: Stats = {
   scoreHistogram: [{ bucket: '80-100', count: 2 }],
 };
 
+const makeSettings = (over: Partial<AppSettings> = {}): AppSettings => ({
+  dailyRefreshAt: '08:00',
+  dailyRefreshEnabled: false,
+  collectMinutes: 0,
+  limitPerSource: 40,
+  minKeepScore: 0,
+  ttlDays: 180,
+  highScore: 80,
+  midScore: 60,
+  llm: { baseUrl: '', model: 'test-model', hasApiKey: false },
+  novelty: { command: '', hasCommand: false },
+  updatedAt: null,
+  nextRefreshAt: null,
+  refreshMode: 'off',
+  ...over,
+});
+
 interface FakeDeps {
   deps: HttpDeps;
   calls: { runCollect: number; createSource: number };
@@ -175,6 +192,8 @@ function makeDeps(over: Partial<HttpDeps> = {}): FakeDeps {
       return RUN;
     },
     isLlmConfigured: () => true,
+    getSettings: () => makeSettings(),
+    updateSettings: (patch) => makeSettings(patch as Partial<AppSettings>),
     generateIdeas: async () => ({
       ideas: [makeIdea({ id: 'idea-new' })],
       usedItems: ['item-1'],
@@ -732,7 +751,12 @@ describe('startServer', () => {
     // 0.001 分钟 = 60ms，让定时器在测试里快速可见
     const config = makeConfig({ port: 0, collectMinutes: 0.001 });
     const { deps, calls } = makeDeps();
-    const handle = await startServer(config, { deps, logger: false, distDir: null });
+    // 定时节奏由生效设置决定（每日定时关、间隔 0.001 分钟 = 60ms）
+    const handle = await startServer(config, {
+      deps: { ...deps, getSettings: () => makeSettings({ collectMinutes: 0.001 }) },
+      logger: false,
+      distDir: null,
+    });
 
     try {
       expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
