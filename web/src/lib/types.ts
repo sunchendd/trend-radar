@@ -39,6 +39,14 @@ export interface Source {
 
 export type ItemKind = 'paper' | 'news' | 'release';
 
+/** release 技术点：分类 + 一句话中文要点（LLM 优先/规则兜底） */
+export type TechCategory = '调度' | 'KV' | '投机' | '量化' | '算子' | '并行' | '硬件' | '其他';
+
+export interface TechPoint {
+  category: TechCategory;
+  zh: string;
+}
+
 export interface Item {
   /** sha1(sourceId + 归一化 url) 前 16 位，去重键 */
   id: string;
@@ -57,6 +65,16 @@ export interface Item {
   scoreReasons: ScoreReason[];
   /** 抽到的关键词（小写） */
   keywords: string[];
+  /** LLM 中文标题（未翻译/中文原文条目没有） */
+  titleZh?: string;
+  /** LLM 中文摘要 */
+  summaryZh?: string;
+  /** 翻译完成时间（ISO） */
+  translatedAt?: string;
+  /** release 技术点（工程动态页；仅 release 条目可能有） */
+  pointsZh?: TechPoint[];
+  /** 抽取完成时间（ISO） */
+  pointsAt?: string;
   /** arXiv/DOI 等外部主键，用于跨源去重 */
   externalId?: string;
 }
@@ -175,7 +193,7 @@ export interface ItemQuery {
   q?: string;
   sourceId?: string;
   kind?: ItemKind;
-  /** 多选类型（后端 `kinds=news,release`）；与单值 kind 二选一，非空时优先 */
+  /** 多选类型（后端 `kinds=news` 等，逗号分隔）；与单值 kind 二选一，非空时优先 */
   kinds?: ItemKind[];
   minScore?: number;
   since?: string;
@@ -213,6 +231,14 @@ export interface Watch {
   lastHits: number | null;
   lastCheckedAt: string | null;
   checks: number;
+  /** 检索引擎：'zhihuiya'（默认）| 'google-patents'；老数据 / 后端未返回时为 undefined，按智慧芽展示 */
+  engine?: string;
+  /** 最近一次快照摘要（R2，字段以后端 listWatches 返回为准；全部可选，缺了就不展示） */
+  lastSnapshot?: {
+    at?: string | null;
+    count?: number | null;
+    topTitles?: string[];
+  } | null;
 }
 
 export type TrendLevel = 'surge' | 'warm' | 'flat' | 'cool' | 'new-front' | 'baseline';
@@ -288,10 +314,68 @@ export interface AppSettings {
     command: string;
     hasCommand: boolean;
   };
+  /** 自动中文翻译（t18） */
+  translation: {
+    enabled: boolean;
+    dailyLimit: number;
+  };
+  /** Bark 推送（R2）：url 是完整的 https://api.day.app/<key>；后端未升级时可能没有该字段 */
+  bark?: {
+    url: string | null;
+    enabled: boolean;
+  };
   /** 上次保存时间（ISO）；从未保存过为 null */
   updatedAt: string | null;
   /** 下一次定时刷新的时间（ISO）；未启用为 null */
   nextRefreshAt: string | null;
+}
+
+/** GET /api/translation/status：翻译功能状态一览 */
+export interface TranslationStatus {
+  enabled: boolean;
+  llmConfigured: boolean;
+  dailyLimit: number;
+  translatedToday: number;
+  pending: number;
+  inflight: boolean;
+  lastRunAt: string | null;
+  lastError: string | null;
+}
+
+/** GET /api/extraction/status：工程动态抽取状态 + 页面 KPI */
+export interface ExtractionStatus {
+  enabled: boolean;
+  llmConfigured: boolean;
+  dailyLimit: number;
+  usedToday: number;
+  pending: number;
+  extractedTotal: number;
+  pointsTotal: number;
+  todayReleases: number;
+  inflight: boolean;
+  lastRunAt: string | null;
+  lastError: string | null;
+}
+
+/** POST /api/extraction/run：一轮抽取的账目 */
+export interface ExtractionRunResult {
+  requested: number;
+  extracted: number;
+  viaLlm: number;
+  viaRules: number;
+  failed: number;
+  capReached: boolean;
+  degraded: boolean;
+}
+
+/** POST /api/translation/run：一轮翻译的账目 */
+export interface TranslationRunResult {
+  requested: number;
+  translated: number;
+  skippedCjk: number;
+  failed: number;
+  capReached: boolean;
+  degraded: boolean;
 }
 
 /** PUT /api/settings 的入参：全部可选，只改传了的字段 */
@@ -306,4 +390,47 @@ export interface AppSettingsPatch {
   midScore?: number;
   llm?: { baseUrl?: string; model?: string; apiKey?: string };
   novelty?: { command?: string };
+  translation?: { enabled?: boolean; dailyLimit?: number };
+  /** url 空串 = 不修改（与 apiKey 同口径） */
+  bark?: { url?: string; enabled?: boolean };
+}
+
+// ---------------------------------------------------------------- 对话会话（R2）
+
+/** GET /api/chat/sessions 的元素（最近 20 条） */
+export interface ChatSessionSummary {
+  sessionId: string;
+  title: string;
+  lastAt: string;
+  messageCount: number;
+}
+
+/** GET /api/chat/sessions/:id 的消息元素 */
+export interface ChatSessionMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  toolsUsed?: string[];
+  sources?: ChatSourceRefLike[];
+  at?: string;
+}
+
+/** 会话详情：容忍裸数组或 {messages} 包裹两种返回 */
+export interface ChatSessionDetail {
+  sessionId: string;
+  messages: ChatSessionMessage[];
+}
+
+/** 引用条目的宽松形状（会话回放时用；ChatPage 里再规整成 ChatSourceRef） */
+export interface ChatSourceRefLike {
+  id?: string;
+  title?: string;
+  url?: string;
+  kind?: string;
+  score?: number;
+}
+
+/** GET /api/ideas/:id/claims 的响应（404 = 还没有草案，页面不渲染该块） */
+export interface ClaimsDraft {
+  content: string;
+  at: string;
 }

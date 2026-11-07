@@ -9,13 +9,14 @@
  * 3. 接口没就绪（404 / 后端没起）时**不假装成功**：显式挂提示、禁用保存。
  */
 import { useCallback, useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
-import { fieldErrorsOf, friendlyError, putSettings, toApiError, type ApiError } from '../lib/api';
+import { fieldErrorsOf, friendlyError, putSettings, testPush, toApiError, type ApiError } from '../lib/api';
 import { absTime, relTime } from '../lib/format';
 import { primeSettings, useAppSettings, useTicker } from '../lib/hooks';
 import { useTheme } from '../lib/theme';
 import type { AppSettings, AppSettingsPatch, RefreshMode } from '../lib/types';
 import { Icon } from '../components/Icon';
 import { NoticeBar } from '../components/States';
+import { TranslationSection } from '../components/TranslationSection';
 import { useToastFns } from '../components/Toast';
 import { Pill, SectionHead, Segmented, Spinner, Toggle } from '../components/primitives';
 
@@ -33,6 +34,9 @@ interface FormState {
   /** 空 = 不修改；永不回显明文 */
   apiKey: string;
   noveltyCommand: string;
+  /** Bark 推送 URL；空 = 不修改（与 apiKey 同口径，后端不回传时为空） */
+  barkUrl: string;
+  barkEnabled: boolean;
 }
 
 const EMPTY_FORM: FormState = {
@@ -48,6 +52,8 @@ const EMPTY_FORM: FormState = {
   llmModel: '',
   apiKey: '',
   noveltyCommand: '',
+  barkUrl: '',
+  barkEnabled: false,
 };
 
 function toForm(s: AppSettings): FormState {
@@ -64,6 +70,8 @@ function toForm(s: AppSettings): FormState {
     llmModel: s.llm.model,
     apiKey: '',
     noveltyCommand: s.novelty.command,
+    barkUrl: s.bark?.url ?? '',
+    barkEnabled: s.bark?.enabled ?? false,
   };
 }
 
@@ -160,6 +168,14 @@ function buildPatch(f: FormState, base: AppSettings): AppSettingsPatch {
   if (f.apiKey.trim() !== '') llm.apiKey = f.apiKey.trim();
   if (Object.keys(llm).length > 0) patch.llm = llm;
   if (f.noveltyCommand.trim() !== base.novelty.command) patch.novelty = { command: f.noveltyCommand.trim() };
+  // Bark（R2）：url 空串 = 不修改（与 apiKey 同口径），只在填了新值时才传 url
+  const barkUrl = f.barkUrl.trim();
+  if (barkUrl !== '' || f.barkEnabled !== (base.bark?.enabled ?? false)) {
+    patch.bark = {
+      ...(barkUrl !== '' ? { url: barkUrl } : {}),
+      enabled: f.barkEnabled,
+    };
+  }
   return patch;
 }
 
@@ -295,6 +311,22 @@ export function SettingsPage({
 
   const now = Date.now() + tick * 0; // tick 只用于触发重渲染，时间取当前
   const data = settings.data;
+
+  // ---------------------------------------------------------------- Bark 测试推送（R2）
+
+  const [barkTesting, setBarkTesting] = useState(false);
+  const onTestBark = useCallback(async () => {
+    setBarkTesting(true);
+    try {
+      // 表单里有未保存的 url 就先测它（先测后存）；留空 = 用已保存配置测
+      await testPush(form.barkUrl.trim() || undefined);
+      toast.ok('测试推送已发送', '请查看手机上的 Bark 通知；没收到就检查 URL 与 App 状态。');
+    } catch (err) {
+      toast.error('测试推送失败', friendlyError(err).hint ?? friendlyError(err).title);
+    } finally {
+      setBarkTesting(false);
+    }
+  }, [form.barkUrl, toast]);
 
   return (
     <div className="mx-auto flex w-full max-w-[880px] flex-col gap-3.5 px-3 py-3.5 md:px-5 md:py-4">
@@ -522,7 +554,7 @@ export function SettingsPage({
               }
             />
             <div className="mt-2 space-y-2.5">
-              <Row label="baseUrl" hint="如 https://api.deepseek.com/v1" error={errors.llmBaseUrl}>
+              <Row label="baseUrl" hint="智谱 coding plan：https://open.bigmodel.cn/api/coding/paas/v4（订阅 key 用标准 paas 端点会报 1113）；OpenAI 兼容端点均可" error={errors.llmBaseUrl}>
                 <input
                   value={form.llmBaseUrl}
                   onChange={(e) => patchField('llmBaseUrl', e.target.value)}
@@ -532,7 +564,7 @@ export function SettingsPage({
                   className="input num h-8 w-full text-[12px] sm:w-[300px]"
                 />
               </Row>
-              <Row label="model" hint="如 deepseek-chat">
+              <Row label="model" hint="如 glm-5.3-flash（思考型模型在翻译/抽取时自动带 thinking disabled）">
                 <input
                   value={form.llmModel}
                   onChange={(e) => patchField('llmModel', e.target.value)}
@@ -556,6 +588,9 @@ export function SettingsPage({
               </Row>
             </div>
           </section>
+
+          {/* 自动中文翻译（t18）：自成一体即时保存，不进主表单保存流 */}
+          {data ? <TranslationSection settings={data} onSaved={settings.refresh} /> : null}
 
           {/* 查新 */}
           <section className="card p-3.5">
@@ -590,6 +625,53 @@ export function SettingsPage({
                   aria-label="查新 CLI 命令"
                   className="input num h-8 w-full text-[12px] sm:w-[260px]"
                 />
+              </Row>
+            </div>
+          </section>
+
+          {/* Bark 推送（R2）：随主表单保存；「测试推送」独立请求，先测后存 */}
+          <section className="card p-3.5">
+            <SectionHead
+              title="Bark 推送"
+              hint="巡检异动等事件推到 iPhone（Bark App）"
+              right={
+                <Pill
+                  color={form.barkEnabled ? 'var(--color-accent)' : 'var(--color-ink-3)'}
+                  bg="color-mix(in oklab, var(--color-accent) 8%, transparent)"
+                  border="color-mix(in oklab, var(--color-accent) 26%, transparent)"
+                >
+                  {form.barkEnabled ? '已启用' : '未启用'}
+                </Pill>
+              }
+            />
+            <div className="mt-2 space-y-2.5">
+              <Row
+                label="推送 URL"
+                hint={data?.bark?.url ? '已配置；留空表示不修改' : 'Bark App 复制出的完整 URL，形如 https://api.day.app/<key>'}
+              >
+                <input
+                  value={form.barkUrl}
+                  onChange={(e) => patchField('barkUrl', e.target.value)}
+                  placeholder="https://api.day.app/<key>"
+                  spellCheck={false}
+                  aria-label="Bark 推送 URL"
+                  className="input num h-8 w-full text-[12px] sm:w-[300px]"
+                />
+              </Row>
+              <Row label="启用推送" hint="关闭后不再发送任何 Bark 通知">
+                <div className="flex items-center gap-2.5">
+                  <Toggle checked={form.barkEnabled} onChange={(v) => patchField('barkEnabled', v)} label="启用 Bark 推送" />
+                  <button
+                    type="button"
+                    className="btn h-8 px-2.5"
+                    disabled={barkTesting}
+                    onClick={() => void onTestBark()}
+                    title={form.barkUrl.trim() ? '用上面填的 URL 发一条测试通知' : '用已保存的 URL 发一条测试通知'}
+                  >
+                    {barkTesting ? <Spinner size={12} /> : <Icon name="bolt" size={12} />}
+                    测试推送
+                  </button>
+                </div>
               </Row>
             </div>
           </section>

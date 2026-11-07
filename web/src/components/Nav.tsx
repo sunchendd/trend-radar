@@ -14,17 +14,21 @@ import { useTheme } from '../lib/theme';
 
 const NAV: { name: PageRoute; label: string; icon: IconName; hint: string }[] = [
   { name: 'papers', label: '论文', icon: 'doc', hint: 'arXiv 等论文源，按相关度排序' },
-  { name: 'news', label: '新闻', icon: 'feed', hint: 'GitHub Releases 与工程博客' },
+  { name: 'news', label: '新闻', icon: 'feed', hint: '行业新闻与工程博客（RSS）' },
+  { name: 'releases', label: '工程动态', icon: 'bolt', hint: 'GitHub Releases 技术要点（vLLM/SGLang/TensorRT-LLM）' },
   { name: 'ideas', label: '选题', icon: 'bulb', hint: '把情报变成可查新的专利选题' },
   { name: 'watch', label: '巡检', icon: 'flame', hint: '盯住方向，命中数异动就是选题信号' },
+  { name: 'chat', label: '对话', icon: 'chat', hint: '雷达助手：问答 / 查新 / 生成选题' },
   { name: 'system', label: '信源', icon: 'antenna', hint: '信源启停与采集日志' },
 ];
 
 export const PAGE_TITLE: Record<PageRoute, { title: string; sub: string }> = {
   papers: { title: '论文', sub: 'arXiv 等论文源 · 按相关度排序，先读高分的那几条' },
-  news: { title: '新闻', sub: 'GitHub Releases + 工程博客 · 工程信号比论文更早暴露实现细节' },
+  news: { title: '新闻', sub: '行业新闻与工程博客 · 了解生态在发生什么' },
+  releases: { title: '工程动态', sub: 'GitHub Releases 技术要点 · 引擎级改动比论文更早落地' },
   ideas: { title: '选题工作台', sub: '查新、判读、交底书素材' },
   watch: { title: '检索式巡检', sub: '命中数环比异动 → 选题触发器' },
+  chat: { title: '对话', sub: '雷达助手 · 检索情报、查论文专利、生成选题，回答带引用来源' },
   system: { title: '信源与日志', sub: '抓取健康度与运行记录' },
   settings: { title: '设置', sub: '采集调度、KPI 口径、LLM 与查新 CLI' },
 };

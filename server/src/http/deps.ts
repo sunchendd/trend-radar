@@ -28,6 +28,7 @@
  * ../ideas/verdict.js  verdict(records): { verdict, reason, status } / statusOf(v): IdeaStatus
  *                      summarizeVerdict(records): { verdict, headline, evidence[], suggestions[] }  // 给 UI 的徽标摘要
  * ../ideas/llm.js      isLlmConfigured(config): boolean
+ *                      createLlm(config): LlmClient     // chat 用；未配置抛 LlmNotConfiguredError
  * ../sources/probe.js  probeSource(input): Promise<{ sampleCount: number }>   ▲ 假定：未落地前的降级见 createSource
  * ==================================================================================
  */
@@ -40,12 +41,16 @@ import {
   writeSettings,
 } from '../store/settings.js';
 import type { VerdictSummary } from '../ideas/verdict.js';
-import type { Watch } from '../store/watches.js';
+import type { LlmClient } from '../ideas/llm.js';
+import type { Watch, WatchEngine } from '../store/watches.js';
+import type { FetchLike } from '../push/bark.js';
 import type { IdeaCluster } from '../ideas/cluster.js';
 import type { SweepOptions, SweepResult } from '../sweep.js';
 import type {
   AppSettings,
   AppSettingsPatch,
+  ExtractionRunResult,
+  ExtractionStatus,
   GenerateIdeasRequest,
   Idea,
   IdeaStatus,
@@ -56,11 +61,16 @@ import type {
   RunRecord,
   Source,
   Stats,
+  TranslationRunResult,
+  TranslationStatus,
 } from '../types.js';
+import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import * as watches from '../store/watches.js';
+import * as paperStore from '../store/papers.js';
+import { createPaperService, PaperError, type PaperFileRef } from '../papers/service.js';
 import { clusterIdeas } from '../ideas/cluster.js';
-import { mapDomainError, notFound, serviceUnavailable, unprocessable } from './errors.js';
+import { ApiException, mapDomainError, notFound, serviceUnavailable, unprocessable } from './errors.js';
 
 export interface NewSourceInput {
   id: string;
@@ -132,12 +142,25 @@ export interface HttpDeps {
 
   listRuns(limit?: number): RunRecord[];
 
+  /** 论文阅读器：PDF 下载状态 / 触发下载 / 文件引用 / 高亮笔记标注 */
+  getPaperStatus(id: string): paperStore.PaperInfo;
+  downloadPaper(id: string): Promise<paperStore.PaperInfo>;
+  getPaperFile(id: string): PaperFileRef | undefined;
+  listPaperAnnotations(itemId: string): paperStore.PaperAnnotation[];
+  addPaperAnnotation(itemId: string, input: paperStore.AnnotationInput): paperStore.PaperAnnotation;
+  updatePaperAnnotation(
+    itemId: string,
+    annotationId: string,
+    patch: { note?: string; color?: string },
+  ): paperStore.PaperAnnotation | undefined;
+  removePaperAnnotation(itemId: string, annotationId: string): boolean;
+
   /** 选题按技术方向聚类（同一方向的多条选题要能被看出来） */
   clusterIdeas(status?: IdeaStatus): IdeaCluster<Idea>[];
 
   /** 检索式巡检：盯住的方向 + 命中数快照 */
   listWatches(includeDisabled?: boolean): Watch[];
-  addWatch(input: { query: string; note?: string }): Watch;
+  addWatch(input: { query: string; note?: string; engine?: WatchEngine }): Watch;
   removeWatch(id: string): boolean;
   setWatchEnabled(id: string, enabled: boolean): boolean;
   /** 跑一轮巡检（会调用外部查新 CLI，可能几十秒） */
@@ -146,8 +169,24 @@ export interface HttpDeps {
   runCollect(config: AppConfig, opts?: { sourceIds?: string[] }): Promise<RunRecord>;
   generateIdeas(req: GenerateIdeasRequest): Promise<GenerateIdeasResult>;
 
+  /** 自动翻译：状态快照（设置页/状态端点用） */
+  translationStatus(): TranslationStatus;
+  /** 手动触发一轮翻译（「翻译今日」按钮）；llm 未配置时返回 degraded 不抛错 */
+  runTranslation(): Promise<TranslationRunResult>;
+  /** 工程动态：release 抽取状态（页面 KPI + 懒触发判断） */
+  extractionStatus(): ExtractionStatus;
+  /** 手动/懒触发一轮抽取（LLM 未配置走规则兜底） */
+  runExtraction(): Promise<ExtractionRunResult>;
+
   /** LLM 是否可用：判定规则只认 ideas/llm.ts，HTTP 层不再复制一份 */
   isLlmConfigured(): boolean;
+
+  /**
+   * chat 对话用的 LLM 客户端工厂：必须以 settings 覆盖后的**生效配置**构建
+   * （路由层拿到的 config 只是 env 基线，不含 DB 覆盖）。未配置时抛
+   * LlmNotConfiguredError（映射 503）。可选：llm.ts 缺失时 chat 降级为 503。
+   */
+  createLlmClient?(): LlmClient;
 
   /**
    * 生效设置（config 默认值 ← settings 表覆盖）。**不含明文 apiKey**，只给 hasApiKey。
@@ -162,6 +201,12 @@ export interface HttpDeps {
    * 可选是因为 verdict.ts 缺失时要能降级成「不带摘要」，而不是整个接口 500。
    */
   summarizeVerdict?(records: NoveltyRecord[]): VerdictSummary;
+
+  /**
+   * 外部 HTTP 注入（Bark 测试推送等出网调用）；缺省用全局 fetch。
+   * 测试注入假实现，保证「设置页测试推送」这类端点离线可测。
+   */
+  fetchLike?: FetchLike;
 
   /** 释放 sqlite 句柄；由 app 的 onClose 调用一次 */
   close(): void;
@@ -208,10 +253,17 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
   const verdictModule = await loadOptionalModule('../ideas/verdict.js');
   const llmModule = await loadOptionalModule('../ideas/llm.js');
   const probeModule = await loadOptionalModule('../sources/probe.js');
+  const translationModule = await loadOptionalModule('../translation/translate.js');
+  const extractionModule = await loadOptionalModule('../extraction/releases.js');
 
   const openDb = pick<(dataDir: string) => Db>(dbModule, 'openDb', '../store/db.js');
   // 全进程只开一个连接：openDb 每调一次都是新连接，绝不能在请求里调
   const db = openDb(config.dataDir);
+
+  // 论文阅读器的 PDF 服务：文件落在 <dataDir>/papers/，与 sqlite 同生命周期
+  const paperService = createPaperService(db as DatabaseSync, {
+    papersDir: join(config.dataDir, 'papers'),
+  });
 
   const q = {
     listItems: pick<(db: Db, query: ItemQuery) => Paged<Item>>(queries, 'listItems', '../store/queries.js'),
@@ -245,6 +297,23 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
     ),
     listRuns: pick<(db: Db, limit?: number) => RunRecord[]>(queries, 'listRuns', '../store/queries.js'),
     stats: pick<(db: Db) => Stats>(queries, 'stats', '../store/queries.js'),
+    listTranslationCandidates: pick<(db: Db, limit: number) => { id: string; kind: string; title: string; summary: string; zhKey: string | null }[]>(
+      queries,
+      'listTranslationCandidates',
+      '../store/queries.js',
+    ),
+    translationCountToday: pick<(db: Db, now?: Date) => number>(queries, 'translationCountToday', '../store/queries.js'),
+    listExtractionCandidates: pick<(db: Db, limit: number) => { id: string; title: string; summary: string; pointsKey: string | null }[]>(
+      queries,
+      'listExtractionCandidates',
+      '../store/queries.js',
+    ),
+    extractionCountToday: pick<(db: Db, now?: Date) => number>(queries, 'extractionCountToday', '../store/queries.js'),
+    releaseKpi: pick<(db: Db, now?: Date) => { todayReleases: number; pointsTotal: number; extractedTotal: number }>(
+      queries,
+      'releaseKpi',
+      '../store/queries.js',
+    ),
   };
 
   // 第二个实参照传：collect.ts 现在是 runCollect(config)，多余实参在 JS 里无害；
@@ -277,6 +346,97 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
         ) => Promise<NoveltyRecord[]>
       >(noveltyModule, 'runNovelty', '../ideas/novelty.js')
     : undefined;
+
+  /** 翻译模块（t18）：缺失时翻译端点降级为 503，而不是整个服务起不来 */
+  const runTranslationPass = translationModule
+    ? pick<
+        (
+          config: AppConfig,
+          deps: { db: Db; llm?: unknown; now?: Date; batchSize?: number; dailyLimit?: number; scanLimit?: number },
+          options?: { background?: boolean },
+        ) => Promise<TranslationRunResult>
+      >(translationModule, 'runTranslationPass', '../translation/translate.js')
+    : undefined;
+  const runnerState = translationModule
+    ? pick<(dataDir: string) => { inflight: boolean; lastRunAt: string | null; lastError: string | null }>(
+        translationModule,
+        'translationRunnerState',
+        '../translation/translate.js',
+      )
+    : undefined;
+  const needsTranslationFn = translationModule
+    ? pick<(item: { kind: string; title: string; summary: string; zhKey?: string | null }) => boolean>(
+        translationModule,
+        'needsTranslation',
+        '../translation/translate.js',
+      )
+    : undefined;
+
+  /** 抽取模块（t21）：缺失时抽取端点降级为 503 */
+  const runExtractionPass = extractionModule
+    ? pick<
+        (
+          config: AppConfig,
+          deps: { db: Db; llm?: unknown; now?: Date; batchSize?: number; dailyLimit?: number; scanLimit?: number },
+          options?: { background?: boolean },
+        ) => Promise<ExtractionRunResult>
+      >(extractionModule, 'runExtractionPass', '../extraction/releases.js')
+    : undefined;
+  const extractionRunnerStateFn = extractionModule
+    ? pick<(dataDir: string) => { inflight: boolean; lastRunAt: string | null; lastError: string | null }>(
+        extractionModule,
+        'extractionRunnerState',
+        '../extraction/releases.js',
+      )
+    : undefined;
+  const needsExtractionFn = extractionModule
+    ? pick<(item: { summary: string; pointsKey?: string | null }) => boolean>(
+        extractionModule,
+        'needsExtraction',
+        '../extraction/releases.js',
+      )
+    : undefined;
+
+  /** 手动/采集后的抽取入口共用：LLM 客户端按生效配置现造 */
+  const buildExtractLlm = async (): Promise<unknown | undefined> => {
+    if (!llmModule || typeof llmModule.createLlm !== 'function') return undefined;
+    const createLlm = llmModule.createLlm as (config: AppConfig) => unknown;
+    try {
+      return createLlm(effectiveConfig());
+    } catch {
+      return undefined;
+    }
+  };
+
+  const pendingExtractionCount = (limit = 400): number => {
+    if (!needsExtractionFn) return 0;
+    let count = 0;
+    for (const candidate of q.listExtractionCandidates(db as Db, limit)) {
+      if (needsExtractionFn(candidate)) count += 1;
+    }
+    return count;
+  };
+
+  /** 手动/采集后的翻译入口共用：LLM 客户端按生效配置现造（key 可能在设置页刚改过） */
+  const buildTranslateLlm = async (): Promise<unknown | undefined> => {
+    if (!llmModule || typeof llmModule.createLlm !== 'function') return undefined;
+    const createLlm = llmModule.createLlm as (config: AppConfig) => unknown;
+    try {
+      return createLlm(effectiveConfig());
+    } catch {
+      // LlmNotConfiguredError → undefined：runTranslationPass 走 degraded 分支
+      return undefined;
+    }
+  };
+
+  const pendingTranslationCount = (limit = 600): number => {
+    if (!needsTranslationFn) return 0;
+    let count = 0;
+    for (const candidate of q.listTranslationCandidates(db as Db, limit)) {
+      if (needsTranslationFn(candidate)) count += 1;
+    }
+    return count;
+  };
   const verdictFns: VerdictFns = verdictModule
     ? {
         verdict:
@@ -359,6 +519,37 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
 
     listRuns: (limit) => q.listRuns(db, limit),
 
+    // ---- 论文阅读器：PDF 下载与标注（服务在 loadDeps 期创建一次，连接复用全局 db） ----
+    getPaperStatus: (id) => paperService.status(id),
+    downloadPaper: async (id) => {
+      const item = q.getItem(db, id);
+      if (!item) throw notFound(`条目 ${id} 不存在`);
+      try {
+        return await paperService.download(id, item);
+      } catch (cause) {
+        if (cause instanceof PaperError) {
+          const mapped =
+            cause.code === 'invalid_item_id'
+              ? new ApiException(400, cause.code, cause.message)
+              : cause.code === 'paper_no_pdf'
+                ? unprocessable(cause.code, cause.message)
+                : serviceUnavailable(cause.code, cause.message);
+          throw mapped;
+        }
+        throw cause;
+      }
+    },
+    getPaperFile: (id) => paperService.file(id),
+    listPaperAnnotations: (itemId) => paperStore.listAnnotations(db as DatabaseSync, itemId),
+    addPaperAnnotation: (itemId, input) => {
+      if (!q.getItem(db, itemId)) throw notFound(`条目 ${itemId} 不存在`);
+      return paperStore.addAnnotation(db as DatabaseSync, itemId, input);
+    },
+    updatePaperAnnotation: (itemId, annotationId, patch) =>
+      paperStore.updateAnnotation(db as DatabaseSync, itemId, annotationId, patch),
+    removePaperAnnotation: (itemId, annotationId) =>
+      paperStore.removeAnnotation(db as DatabaseSync, itemId, annotationId),
+
     clusterIdeas: (status) => clusterIdeas(q.listIdeas(db, status)),
     listWatches: (includeDisabled) => watches.listWatches(db as DatabaseSync, includeDisabled ?? false),
     addWatch: (input) => watches.addWatch(db as DatabaseSync, input),
@@ -373,7 +564,30 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
     },
     stats: () => q.stats(db),
     // 传入的 cfg 只是兜底：真正生效的配置以 settings 覆盖后的为准
-    runCollect: (_cfg, opts) => runCollect(effectiveConfig(), opts),
+    runCollect: (_cfg, opts) =>
+      runCollect(effectiveConfig(), opts).then((run) => {
+        // 采集落库后异步后处理：①t18 翻译 ②t21 release 技术点抽取。
+        // 都不阻塞采集响应；失败只进各自 runner 状态快照。
+        if (snapshotSettings().translation.enabled) {
+          void (async () => {
+            try {
+              if (!runTranslationPass) return;
+              const llm = await buildTranslateLlm();
+              await runTranslationPass(effectiveConfig(), { db, llm }, { background: true });
+            } catch {
+              // 后台任务的兜底：状态已记录在 runnerState.lastError
+            }
+            try {
+              if (!runExtractionPass) return;
+              const llm = await buildExtractLlm();
+              await runExtractionPass(effectiveConfig(), { db, llm }, { background: true });
+            } catch {
+              // 同上：extractionRunnerState.lastError
+            }
+          })();
+        }
+        return run;
+      }),
     generateIdeas: async (req) => {
       if (!generateIdeas) {
         throw serviceUnavailable('pipeline_unavailable', '选题流水线未就绪（ideas/pipeline.ts 需导出 generateIdeas）');
@@ -404,6 +618,72 @@ export async function loadDeps(config: AppConfig, options: LoadDepsOptions = {})
       llmModule && typeof llmModule.isLlmConfigured === 'function'
         ? () => (llmModule.isLlmConfigured as (config: AppConfig) => boolean)(effectiveConfig())
         : () => true,
+    // chat 的客户端工厂：每次对话现建一个（无状态），配置永远取 settings 覆盖后的生效值
+    ...(llmModule && typeof llmModule.createLlm === 'function'
+      ? { createLlmClient: (): LlmClient => (llmModule.createLlm as (config: AppConfig) => LlmClient)(effectiveConfig()) }
+      : {}),
+
+    translationStatus: (): TranslationStatus => {
+      const settings = snapshotSettings();
+      const state = runnerState ? runnerState(config.dataDir) : { inflight: false, lastRunAt: null, lastError: null };
+      return {
+        enabled: settings.translation.enabled,
+        llmConfigured: llmModule
+          ? (llmModule.isLlmConfigured as (config: AppConfig) => boolean)(effectiveConfig())
+          : false,
+        dailyLimit: settings.translation.dailyLimit,
+        translatedToday: q.translationCountToday(db as Db),
+        pending: pendingTranslationCount(),
+        inflight: state.inflight,
+        lastRunAt: state.lastRunAt,
+        lastError: state.lastError,
+      };
+    },
+    runTranslation: async (): Promise<TranslationRunResult> => {
+      if (!runTranslationPass) {
+        throw serviceUnavailable('translation_unavailable', '翻译模块未就绪（translation/translate.ts 需导出 runTranslationPass）');
+      }
+      const settings = snapshotSettings();
+      if (!settings.translation.enabled) {
+        throw unprocessable('translation_disabled', '自动翻译已在设置页关闭；打开后才能手动触发');
+      }
+      const llm = await buildTranslateLlm();
+      return runTranslationPass(effectiveConfig(), { db, llm });
+    },
+
+    extractionStatus: (): ExtractionStatus => {
+      const settings = snapshotSettings();
+      const state = extractionRunnerStateFn
+        ? extractionRunnerStateFn(config.dataDir)
+        : { inflight: false, lastRunAt: null, lastError: null };
+      const kpi = q.releaseKpi(db as Db);
+      return {
+        enabled: settings.translation.enabled,
+        llmConfigured: llmModule
+          ? (llmModule.isLlmConfigured as (config: AppConfig) => boolean)(effectiveConfig())
+          : false,
+        dailyLimit: settings.translation.dailyLimit,
+        usedToday: q.translationCountToday(db as Db) + q.extractionCountToday(db as Db),
+        pending: pendingExtractionCount(),
+        extractedTotal: kpi.extractedTotal,
+        pointsTotal: kpi.pointsTotal,
+        todayReleases: kpi.todayReleases,
+        inflight: state.inflight,
+        lastRunAt: state.lastRunAt,
+        lastError: state.lastError,
+      };
+    },
+    runExtraction: async (): Promise<ExtractionRunResult> => {
+      if (!runExtractionPass) {
+        throw serviceUnavailable('extraction_unavailable', '抽取模块未就绪（extraction/releases.ts 需导出 runExtractionPass）');
+      }
+      const settings = snapshotSettings();
+      if (!settings.translation.enabled) {
+        throw unprocessable('extraction_disabled', '自动处理已在设置页关闭；打开后才能手动触发');
+      }
+      const llm = await buildExtractLlm();
+      return runExtractionPass(effectiveConfig(), { db, llm });
+    },
 
     getSettings: snapshotSettings,
     updateSettings: (patch) => {

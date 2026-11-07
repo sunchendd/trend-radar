@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { DEFAULT_SOURCES } from '../sources/defaults.js';
-import { seedSources } from './queries.js';
+import { mergeDefaultSources, seedSources } from './queries.js';
 
 /**
  * 存储入口。
@@ -91,6 +91,36 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   // v1 -> v2：记录每个源的耗时与产出（老数据没有这一列，读出来是 undefined，不是空数组）
   (db) => {
     db.exec(`ALTER TABLE runs ADD COLUMN per_source TEXT`);
+  },
+  // v2 -> v3：条目自动中文翻译（t18）。译文三列 + zh_key（翻译时的内容指纹，
+  // 内容变了 key 对不上就重译）；老库三列都是 NULL，mapItem 读出来是 undefined。
+  (db) => {
+    db.exec(`
+      ALTER TABLE items ADD COLUMN title_zh TEXT;
+      ALTER TABLE items ADD COLUMN summary_zh TEXT;
+      ALTER TABLE items ADD COLUMN translated_at TEXT;
+      ALTER TABLE items ADD COLUMN zh_key TEXT;
+      CREATE INDEX items_translated ON items(translated_at);
+    `);
+  },
+  // v3 -> v4：默认源种子合并（t19）。内置清单新增了 41 个 daily-newsletter RSS 源，
+  // 已装库（表非空、走不到首次灌库分支）必须把缺失的默认源补进来。
+  // mergeDefaultSources 是 INSERT OR IGNORE：只补缺失 id，已有的行（用户改过
+  // enabled/weight/note 的）原样保留；重复启动/重复跑迁移都不产生重复。
+  // 写法刻意保持「版本号递增的顺序迁移」，后续 t21 的抽取字段直接追加 v5 即可。
+  (db) => {
+    mergeDefaultSources(db, DEFAULT_SOURCES);
+  },
+  // v4 -> v5：release 技术点抽取（t21）。points_zh 存结构化中文要点 JSON 数组
+  // （[{category,zh}]），points_key 是抽取时的内容指纹（同 release 内容变更重抽），
+  // points_at 是抽取时间；与 v3 的翻译四列互不干扰（release 摘要复用翻译的 summaryZh）。
+  (db) => {
+    db.exec(`
+      ALTER TABLE items ADD COLUMN points_zh TEXT;
+      ALTER TABLE items ADD COLUMN points_at TEXT;
+      ALTER TABLE items ADD COLUMN points_key TEXT;
+      CREATE INDEX items_points ON items(points_at);
+    `);
   },
 ];
 

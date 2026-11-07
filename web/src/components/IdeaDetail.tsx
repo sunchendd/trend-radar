@@ -6,8 +6,9 @@
  * 2. `hits === null`（解析失败）与 `hits === 0`（零命中）必须视觉可区分，
  *    且两者都**不是**技术空白——全零先怀疑检索式。
  */
-import { useMemo, useState, type JSX } from 'react';
-import type { IdeaStatus, IdeaWithVerdict, NoveltyRecord } from '../lib/types';
+import { useMemo, useState, useEffect, type JSX } from 'react';
+import { getIdeaClaims } from '../lib/api';
+import type { ClaimsDraft, IdeaStatus, IdeaWithVerdict, NoveltyRecord } from '../lib/types';
 import {
   BAND_META,
   RED_OCEAN_HITS,
@@ -222,6 +223,9 @@ export function IdeaDetail({
           </div>
         </div>
 
+        {/* 权利要求草案（R2）：聊天触发生成，这里只读展示；没有就不渲染 */}
+        <ClaimsSection ideaId={idea.id} />
+
         {/* 查新 */}
         <section className="mt-5">
           <SectionHead
@@ -425,6 +429,61 @@ export function IdeaDetail({
         ) : null}
       </div>
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ 权利要求草案（R2）
+
+/**
+ * 只读展示聊天助手起草的权利要求。
+ * 404（还没有草案）→ 整块不渲染，不留空架子；加载/其它错误同样静默降级——
+ * 草案是锦上添花，绝不能让一个可选块把详情页拖垮。
+ */
+function ClaimsSection({ ideaId }: { ideaId: string }): JSX.Element | null {
+  const { copy, copied } = useCopy();
+  const [claims, setClaims] = useState<ClaimsDraft | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setClaims(null);
+    getIdeaClaims(ideaId)
+      .then((draft) => {
+        if (!cancelled) setClaims(draft); // null = 404，维持不渲染
+      })
+      .catch(() => {
+        // 非法响应 / 网络问题：维持不渲染，与「没有草案」同等对待
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ideaId]);
+
+  if (!claims || claims.content.trim() === '') return null;
+  return (
+    <section className="mt-5">
+      <SectionHead
+        title="权利要求草案"
+        hint="由对话助手起草，撰写交底书前必须人工核对"
+        right={
+          <span className="flex items-center gap-1.5">
+            <span className="num text-[10px] text-ink-3">生成 {absTime(claims.at)}</span>
+            <button
+              type="button"
+              className="btn h-7 px-2 text-[11px]"
+              onClick={() => void copy(claims.content)}
+              title="复制权利要求全文"
+            >
+              <Icon name={copied ? 'check' : 'copy'} size={12} />
+              {copied ? '已复制全文' : '复制全文'}
+            </button>
+          </span>
+        }
+      />
+      {/* 内容来自后端纯文本，React 文本节点渲染，无 HTML 注入面 */}
+      <pre className="mono overflow-x-auto rounded-tile border border-line bg-sunken px-3 py-2.5 text-[11px] leading-[1.7] break-words whitespace-pre-wrap text-ink-2">
+        {claims.content}
+      </pre>
+    </section>
   );
 }
 

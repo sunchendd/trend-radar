@@ -135,10 +135,14 @@ describe('数据库初始化', () => {
       expect(source.url.startsWith('https://'), `${source.id} 必须用 https`).toBe(true);
       expect(source.weight).toBeGreaterThanOrEqual(0.1);
       expect(source.weight).toBeLessThanOrEqual(3);
-      expect(source.enabled).toBe(true);
       expect(source.tags.length).toBeGreaterThan(0);
       expect(source.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      // 已实测的死源默认禁用，且备注必须写明「默认禁用」与原因，防止后来者重新加回坏源
+      if (!source.enabled) expect(source.note, `${source.id} 缺少死因备注`).toContain('默认禁用');
     }
+    // 启用源至少覆盖原有规模；禁用行只允许是留档的死源
+    expect(sources.filter((source) => source.enabled).length).toBeGreaterThanOrEqual(6);
+    expect(sources.filter((source) => source.enabled === false).every((source) => source.note.includes('默认禁用'))).toBe(true);
   });
 
   it('arXiv 源都走 https（http 会 301，并发查同一 URL 会 500）', () => {
@@ -399,8 +403,11 @@ describe('采集记录与统计', () => {
     expect(empty.items).toBe(0);
     expect(empty.ideas).toBe(0);
     expect(empty.lastRunAt).toBeNull();
-    expect(empty.sources).toBeGreaterThanOrEqual(6);
-    expect(empty.enabledSources).toBe(empty.sources);
+    // 内置源含默认禁用的死源行：sources 是全量，enabledSources 只数启用的
+    const all = listSources(db);
+    expect(empty.sources).toBe(all.length);
+    expect(empty.enabledSources).toBe(all.filter((source) => source.enabled).length);
+    expect(empty.enabledSources).toBeLessThan(empty.sources);
 
     insertItems(db, [
       makeItem({ url: 'https://example.com/1', score: 10, publishedAt: daysAgo(1) }),
@@ -429,7 +436,8 @@ describe('采集记录与统计', () => {
 
     const disabled = listSources(db)[0]!;
     updateSource(db, disabled.id, { enabled: false });
-    expect(stats(db, NOW).enabledSources).toBe(filled.sources - 1);
+    // 从「启用」里停掉一个：enabledSources 减一，与全量 sources 无关（内置含死源行）
+    expect(stats(db, NOW).enabledSources).toBe(filled.enabledSources - 1);
   });
 });
 

@@ -33,6 +33,8 @@ const makeConfig = (over: Partial<AppConfig> = {}): AppConfig => ({
   ttlDays: 180,
   llm: { baseUrl: '', apiKey: '', model: 'test-model', temperature: 0, maxTokens: 256 },
   novelty: { command: '', agreeKick: false },
+  translation: { enabled: true, dailyLimit: 500 },
+  bark: { url: '', enabled: true },
   ...over,
 });
 
@@ -112,6 +114,7 @@ const makeSettings = (over: Partial<AppSettings> = {}): AppSettings => ({
   midScore: 60,
   llm: { baseUrl: '', model: 'test-model', hasApiKey: false },
   novelty: { command: '', hasCommand: false },
+  bark: { url: '', enabled: true },
   updatedAt: null,
   nextRefreshAt: null,
   refreshMode: 'off',
@@ -184,6 +187,24 @@ function makeDeps(over: Partial<HttpDeps> = {}): FakeDeps {
       })!;
     },
     listRuns: () => [RUN],
+    // 论文阅读器：这些测试不碰论文端点，给最小桩实现即可
+    getPaperStatus: () => ({ itemId: '', status: 'none', originUrl: '', bytes: null, error: '', downloadedAt: null, updatedAt: '' }),
+    downloadPaper: async () => ({ itemId: '', status: 'none', originUrl: '', bytes: null, error: '', downloadedAt: null, updatedAt: '' }),
+    getPaperFile: () => undefined,
+    listPaperAnnotations: () => [],
+    addPaperAnnotation: (itemId, input) => ({
+      id: 'anno-stub',
+      itemId,
+      page: input.page,
+      rects: input.rects,
+      text: input.text ?? '',
+      note: input.note ?? '',
+      color: input.color ?? '#f2b357',
+      createdAt: '',
+      updatedAt: '',
+    }),
+    updatePaperAnnotation: () => undefined,
+    removePaperAnnotation: () => false,
     stats: () => STATS,
     runCollect: async () => {
       calls.runCollect += 1;

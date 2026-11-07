@@ -15,6 +15,7 @@ import type {
   SourceError,
   SourceKind,
   Stats,
+  TechPoint,
 } from '../types.js';
 import { normalizeUrl } from '../url.js';
 
@@ -66,6 +67,25 @@ function mapItem(row: Row): Item {
   };
   const externalId = row['external_id'];
   if (typeof externalId === 'string' && externalId !== '') item.externalId = externalId;
+  // v3 翻译列：NULL = 没翻译过（mapItem 保持 undefined，序列化时不出现空字段）
+  const titleZh = row['title_zh'];
+  const summaryZh = row['summary_zh'];
+  const translatedAt = row['translated_at'];
+  if (typeof titleZh === 'string' && titleZh !== '') item.titleZh = titleZh;
+  if (typeof summaryZh === 'string' && summaryZh !== '') item.summaryZh = summaryZh;
+  if (typeof translatedAt === 'string' && translatedAt !== '') item.translatedAt = translatedAt;
+  // v5 抽取列（t21）：release 技术点 JSON 数组
+  const pointsZh = row['points_zh'];
+  const pointsAt = row['points_at'];
+  if (typeof pointsZh === 'string' && pointsZh !== '') {
+    try {
+      const parsed: unknown = JSON.parse(pointsZh);
+      if (Array.isArray(parsed) && parsed.length > 0) item.pointsZh = parsed as TechPoint[];
+    } catch {
+      // 坏数据不毒化整页查询
+    }
+  }
+  if (typeof pointsAt === 'string' && pointsAt !== '') item.pointsAt = pointsAt;
   return item;
 }
 
@@ -159,32 +179,46 @@ export function listEnabledSources(db: DatabaseSync): Source[] {
  * 为什么不让调用方判断：db.ts 初始化与 `POST /api/collect` 都可能先跑，
  * 把幂等判断收在这里，任何入口都不会重复插入。
  */
+/** 共享的幂等插入：id 撞了就跳过（已有行——哪怕用户改过 enabled/weight——一律不动）。
+ *  不自己开事务：既有的两个调用方各有事务语境（seedSources 的 tx、迁移里的 BEGIN）。 */
+function insertSourcesIgnoring(db: DatabaseSync, sources: Source[]): number {
+  const statement = db.prepare(
+    `INSERT OR IGNORE INTO sources (id, kind, label, url, weight, enabled, tags, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  let inserted = 0;
+  for (const source of sources) {
+    const result = statement.run(
+      source.id,
+      source.kind,
+      source.label,
+      source.url,
+      source.weight,
+      source.enabled ? 1 : 0,
+      JSON.stringify(source.tags),
+      source.note,
+      source.createdAt,
+    );
+    inserted += Number(result.changes);
+  }
+  return inserted;
+}
+
 export function seedSources(db: DatabaseSync, sources: Source[]): number {
   const count = num(db.prepare('SELECT COUNT(*) AS c FROM sources').get()?.['c']);
   if (count > 0) return 0;
 
-  return tx(db, () => {
-    const statement = db.prepare(
-      `INSERT OR IGNORE INTO sources (id, kind, label, url, weight, enabled, tags, note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    let inserted = 0;
-    for (const source of sources) {
-      const result = statement.run(
-        source.id,
-        source.kind,
-        source.label,
-        source.url,
-        source.weight,
-        source.enabled ? 1 : 0,
-        JSON.stringify(source.tags),
-        source.note,
-        source.createdAt,
-      );
-      inserted += Number(result.changes);
-    }
-    return inserted;
-  });
+  return tx(db, () => insertSourcesIgnoring(db, sources));
+}
+
+/**
+ * 默认源「合并」入库（t19 种子迁移用）：与 seedSources 的区别是**不看表是否为空**——
+ * 已装库把缺失的内置源补进来，已有的行（含用户改过的 enabled/weight/note）原样保留。
+ * INSERT OR IGNORE 天然幂等：跑多少遍都不产生重复。不开自己的事务：主要调用方是
+ * db.ts 的迁移（外面已经有 BEGIN/COMMIT 包着），嵌套 BEGIN 会直接报错。
+ */
+export function mergeDefaultSources(db: DatabaseSync, sources: Source[]): number {
+  return insertSourcesIgnoring(db, sources);
 }
 
 export type NewSourceInput = Pick<Source, 'id' | 'kind' | 'label' | 'url'> &
@@ -424,6 +458,171 @@ export function pruneItems(db: DatabaseSync, ttlDays: number, now: Date = new Da
   if (!Number.isFinite(ttlDays) || ttlDays <= 0) return 0;
   const cutoff = new Date(now.getTime() - ttlDays * 86_400_000).toISOString();
   return Number(db.prepare('DELETE FROM items WHERE published_at < ?').run(cutoff).changes);
+}
+
+// ---------------------------------------------------------------- 自动翻译（t18）
+
+/** 翻译候选行：存储层不做语言判断（那是 translation 模块的规则），只给出原文与指纹 */
+export interface TranslationCandidate {
+  id: string;
+  kind: ItemKind;
+  title: string;
+  summary: string;
+  /** 当前译文（可能没有） */
+  titleZh: string | null;
+  summaryZh: string | null;
+  translatedAt: string | null;
+  /** 翻译时的内容指纹；与当前内容不一致 = 内容变更过，要重译 */
+  zhKey: string | null;
+}
+
+/** 候选按 fetched_at 倒序：今天的/最新的先翻；limit 由调用方按每日上限决定 */
+export function listTranslationCandidates(db: DatabaseSync, limit: number): TranslationCandidate[] {
+  const rows = db
+    .prepare(
+      `SELECT id, kind, title, summary, title_zh, summary_zh, translated_at, zh_key
+       FROM items
+       WHERE kind IN ('paper', 'news', 'release')
+       ORDER BY fetched_at DESC
+       LIMIT ?`,
+    )
+    .all(Math.max(1, Math.floor(limit))) as Row[];
+  return rows.map((row) => ({
+    id: str(row['id']),
+    kind: str(row['kind'], 'news') as ItemKind,
+    title: str(row['title']),
+    summary: str(row['summary']),
+    titleZh: typeof row['title_zh'] === 'string' ? row['title_zh'] : null,
+    summaryZh: typeof row['summary_zh'] === 'string' ? row['summary_zh'] : null,
+    translatedAt: typeof row['translated_at'] === 'string' ? row['translated_at'] : null,
+    zhKey: typeof row['zh_key'] === 'string' ? row['zh_key'] : null,
+  }));
+}
+
+export interface TranslationSave {
+  id: string;
+  titleZh: string;
+  summaryZh: string;
+  translatedAt: string;
+  /** 翻译时的内容指纹（sha1 前 16 位）；下次扫描不一致就重译 */
+  zhKey: string;
+}
+
+/** 批量写译文；内容变更重译时覆盖旧值（id 是主键） */
+export function saveTranslations(db: DatabaseSync, rows: TranslationSave[]): number {
+  if (rows.length === 0) return 0;
+  const upsert = db.prepare(
+    `UPDATE items
+     SET title_zh = ?, summary_zh = ?, translated_at = ?, zh_key = ?
+     WHERE id = ?`,
+  );
+  return tx(db, () => {
+    let saved = 0;
+    for (const row of rows) {
+      saved += Number(upsert.run(row.titleZh, row.summaryZh, row.translatedAt, row.zhKey, row.id).changes);
+    }
+    return saved;
+  });
+}
+
+/** 今天（本地时区零点起）已翻译条数：每日上限的对账基准 */
+export function translationCountToday(db: DatabaseSync, now: Date = new Date()): number {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const row = db.prepare('SELECT COUNT(*) AS c FROM items WHERE translated_at >= ?').get(start.toISOString()) as Row;
+  return num(row['c']);
+}
+
+// ---------------------------------------------------------------- 技术点抽取（t21）
+
+export interface ExtractionCandidate {
+  id: string;
+  title: string;
+  summary: string;
+  /** release note 原文就是 summary（Atom content） */
+  pointsZh: TechPoint[] | null;
+  pointsAt: string | null;
+  pointsKey: string | null;
+}
+
+/** release 抽取候选：kind=release 按 fetched_at 倒序 */
+export function listExtractionCandidates(db: DatabaseSync, limit: number): ExtractionCandidate[] {
+  const rows = db
+    .prepare(
+      `SELECT id, title, summary, points_zh, points_at, points_key
+       FROM items
+       WHERE kind = 'release'
+       ORDER BY fetched_at DESC
+       LIMIT ?`,
+    )
+    .all(Math.max(1, Math.floor(limit))) as Row[];
+  return rows.map((row) => {
+    let points: TechPoint[] | null = null;
+    if (typeof row['points_zh'] === 'string' && row['points_zh'] !== '') {
+      try {
+        const parsed: unknown = JSON.parse(row['points_zh']);
+        if (Array.isArray(parsed) && parsed.length > 0) points = parsed as TechPoint[];
+      } catch {
+        points = null;
+      }
+    }
+    return {
+      id: str(row['id']),
+      title: str(row['title']),
+      summary: str(row['summary']),
+      pointsZh: points,
+      pointsAt: typeof row['points_at'] === 'string' ? row['points_at'] : null,
+      pointsKey: typeof row['points_key'] === 'string' ? row['points_key'] : null,
+    };
+  });
+}
+
+export interface ExtractionSave {
+  id: string;
+  pointsZh: TechPoint[];
+  pointsAt: string;
+  pointsKey: string;
+}
+
+export function saveExtractions(db: DatabaseSync, rows: ExtractionSave[]): number {
+  if (rows.length === 0) return 0;
+  const upsert = db.prepare('UPDATE items SET points_zh = ?, points_at = ?, points_key = ? WHERE id = ?');
+  return tx(db, () => {
+    let saved = 0;
+    for (const row of rows) {
+      saved += Number(upsert.run(JSON.stringify(row.pointsZh), row.pointsAt, row.pointsKey, row.id).changes);
+    }
+    return saved;
+  });
+}
+
+/** 今日 LLM 消耗（抽取池）：与翻译共用同一 dailyLimit 池 */
+export function extractionCountToday(db: DatabaseSync, now: Date = new Date()): number {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const row = db.prepare('SELECT COUNT(*) AS c FROM items WHERE points_at >= ?').get(start.toISOString()) as Row;
+  return num(row['c']);
+}
+
+/** 工程动态页 KPI：今日发版数 / 技术点总数 */
+export function releaseKpi(db: DatabaseSync, now: Date = new Date()): { todayReleases: number; pointsTotal: number; extractedTotal: number } {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const today = db
+    .prepare("SELECT COUNT(*) AS c FROM items WHERE kind = 'release' AND fetched_at >= ?")
+    .get(start.toISOString()) as Row;
+  const rows = db
+    .prepare('SELECT points_zh FROM items WHERE kind = \'release\' AND points_zh IS NOT NULL')
+    .all() as Row[];
+  let pointsTotal = 0;
+  let extractedTotal = 0;
+  for (const row of rows) {
+    extractedTotal += 1;
+    try {
+      const parsed: unknown = JSON.parse(str(row['points_zh']));
+      if (Array.isArray(parsed)) pointsTotal += parsed.length;
+    } catch {
+      // 坏行不计点数
+    }
+  }
+  return { todayReleases: num(today['c']), pointsTotal, extractedTotal };
 }
 
 // ---------------------------------------------------------------- runs

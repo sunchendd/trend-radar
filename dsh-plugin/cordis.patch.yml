@@ -1,0 +1,14 @@
+# Trend-radar bundle: one Host plugin row that owns the dashboard server process,
+# the /trend-radar reverse proxy (SSE streamed straight through), the
+# /api/trend-radar action route and the eight trend_* tools.
+- insert:
+    - id: trend-radar
+      name: '@local/dsh-trend-radar'
+      config:
+        # 服务端口；只在本机回环，外部访问一律走 /trend-radar 反代
+        port: 8787
+        # 仓库根默认自动探测（index.js 用 import.meta.url 上一级），
+        # 仅在仓库被挪出插件相对位置时才需要显式指定：
+        # repo: /Users/sunchendong/Desktop/dsh-plugins/trend-radar
+        # 数据目录；默认 ~/.trend-radar（与旧工具桥一致，避免两处数据漂移）
+        # dataDir: ~/.trend-radar

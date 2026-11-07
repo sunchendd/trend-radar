@@ -33,6 +33,8 @@ function makeConfig(dataDir: string, over: Partial<AppConfig> = {}): AppConfig {
     ttlDays: 180,
     llm: { baseUrl: '', apiKey: '', model: '', temperature: 0.7, maxTokens: 1000 },
     novelty: { command: '', agreeKick: false },
+    translation: { enabled: true, dailyLimit: 500 },
+    bark: { url: '', enabled: true },
     ...over,
   };
 }
@@ -536,5 +538,86 @@ describe('probeSource：新增源探活', () => {
     await expect(
       probeSource({ id: 'probe', kind: 'rss', label: 'probe', url: URL_RSS }, { fetch, hostPacingMs: {}, attempts: 1 }),
     ).rejects.toThrow(/解析不出任何条目/);
+  });
+});
+
+// ---------------------------------------------------------------- arXiv 串行限速（429 修复）
+
+/**
+ * 上一轮采集 3 个 arXiv 源全部 429/超时的修复验证：
+ * arXiv 源必须串行执行（一个请求完整结束才发下一个）且相邻请求间隔 ≥ 限速值，
+ * 其余源照常并发。用 15ms 的短限速代替真实 3s（官方 1req/3s 的比例缩影）。
+ */
+describe('arXiv 源串行限速', () => {
+  interface CallTiming {
+    url: string;
+    start: number;
+    end: number;
+  }
+
+  it('arXiv 源串行 + 相邻请求间隔 ≥ pacing；其余源并发不受影响', async () => {
+    const timings: CallTiming[] = [];
+    const fetchImpl: FetchLike = async (input) => {
+      const url = String(input);
+      const route = ROUTES[url];
+      if (!route || route.error) throw new Error(`unexpected url: ${url}`);
+      const start = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 8));
+      timings.push({ url, start, end: Date.now() });
+      return new Response(route.body ?? '', {
+        status: 200,
+        headers: { 'content-type': 'application/xml; charset=utf-8' },
+      });
+    };
+
+    const run = await runCollect(makeConfig(dataDir), {
+      fetch: fetchImpl,
+      sources: SOURCES,
+      hostPacingMs: { 'export.arxiv.org': 15 },
+      attempts: 1,
+      scoreOptions: { now: NOW },
+    });
+
+    const arxivCalls = timings
+      .filter((entry) => entry.url.includes('export.arxiv.org'))
+      .sort((a, b) => a.start - b.start);
+    expect(arxivCalls).toHaveLength(2); // arxiv-a + arxiv-b
+    for (let i = 1; i < arxivCalls.length; i += 1) {
+      // 串行：上一个请求完整结束后才发下一个
+      expect(arxivCalls[i]!.start).toBeGreaterThanOrEqual(arxivCalls[i - 1]!.end);
+      // 限速：相邻请求的发出间隔 ≥ pacing
+      expect(arxivCalls[i]!.start - arxivCalls[i - 1]!.start).toBeGreaterThanOrEqual(15);
+    }
+    // 其余源照常：gh / rss 都抓到了，坏源错误语义不变
+    expect(timings.some((entry) => entry.url === URL_GH)).toBe(true);
+    expect(timings.some((entry) => entry.url === URL_RSS)).toBe(true);
+    expect(run.errors.map((error) => error.sourceId)).toEqual(['broken-feed']);
+    expect(run.added).toBe(4);
+  });
+
+  it('429 一律等 5s 再重试（通过可注入 sleep 断言等待时长）', async () => {
+    const waits: number[] = [];
+    let attempt = 0;
+    const fetchImpl: FetchLike = async () => {
+      attempt += 1;
+      if (attempt === 1) return new Response('rate limited', { status: 429 });
+      return new Response(GITHUB_ATOM, { status: 200 });
+    };
+
+    const result = await fetchAllSources(makeConfig(dataDir), {
+      fetch: fetchImpl,
+      sources: [makeSource({ id: 'gh-vllm', kind: 'atom', url: URL_GH, tags: ['release'] })],
+      hostPacingMs: {},
+      attempts: 2,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+      now: () => NOW,
+    });
+
+    expect(attempt).toBe(2);
+    expect(waits).toEqual([5000]);
+    expect(result.errors).toEqual([]);
+    expect(result.items).toHaveLength(1);
   });
 });

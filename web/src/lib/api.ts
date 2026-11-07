@@ -21,7 +21,15 @@ import type {
   Source,
   Stats,
   SweepResult,
+  ExtractionRunResult,
+  ExtractionStatus,
+  TranslationRunResult,
+  TranslationStatus,
   Watch,
+  ClaimsDraft,
+  ChatSessionDetail,
+  ChatSessionMessage,
+  ChatSessionSummary,
 } from './types';
 import * as mock from './mock';
 
@@ -456,8 +464,15 @@ export function listWatches(all = false): Promise<Watch[]> {
   return request(`/api/watches${all ? '?all=true' : ''}`, { fallback: () => [] });
 }
 
-export function addWatch(query: string, note?: string): Promise<Watch> {
-  return request('/api/watches', { method: 'POST', body: { query, ...(note ? { note } : {}) } });
+/**
+ * 新增巡检。engine 省略 = 后端默认（智慧芽）；
+ * 'google-patents' 走 Google Patents 公开检索，不需要智慧芽配置（R2 契约）。
+ */
+export function addWatch(query: string, note?: string, engine?: 'zhihuiya' | 'google-patents'): Promise<Watch> {
+  return request('/api/watches', {
+    method: 'POST',
+    body: { query, ...(note ? { note } : {}), ...(engine ? { engine } : {}) },
+  });
 }
 
 export function removeWatch(id: string): Promise<void> {
@@ -537,6 +552,20 @@ export function autoNovelty(ideaId: string, queries?: string[]): Promise<IdeaWit
   });
 }
 
+/**
+ * 权利要求草案（R2）：由聊天触发生成，本页只读展示。
+ * 404 = 还没有草案 → 返回 null（调用方不渲染该块，不留空架子）。
+ */
+export async function getIdeaClaims(ideaId: string): Promise<ClaimsDraft | null> {
+  try {
+    return await request<ClaimsDraft>(`/api/ideas/${encodeURIComponent(ideaId)}/claims`, { timeout: 10_000 });
+  } catch (err) {
+    const apiErr = toApiError(err);
+    if (apiErr.code === 'not_found') return null;
+    throw apiErr;
+  }
+}
+
 // ------------------------------------------------------------------ 运行时设置
 
 /**
@@ -553,8 +582,9 @@ const DEMO_SETTINGS: AppSettings = {
   highScore: 70,
   midScore: 50,
   refreshMode: 'daily',
-  llm: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', hasApiKey: false },
+  llm: { baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3-flash', hasApiKey: false },
   novelty: { command: 'zhihuiya', hasCommand: false },
+  translation: { enabled: true, dailyLimit: 2000 },
   updatedAt: null,
   nextRefreshAt: null,
 };
@@ -627,8 +657,346 @@ export function putSettings(patch: AppSettingsPatch): Promise<AppSettings> {
   });
 }
 
+/**
+ * Bark 测试推送（R2）。url 省略 = 用已保存的配置测；
+ * 带上表单里未保存的 url 可以「先测后存」，后端不认这个字段时会自动忽略。
+ */
+export function testPush(url?: string): Promise<{ ok: boolean }> {
+  return request('/api/push/test', {
+    method: 'POST',
+    body: url && url.trim() !== '' ? { url: url.trim() } : {},
+    timeout: 20_000,
+  });
+}
+
+// ------------------------------------------------------------------ 自动翻译（t18）
+
+export function getTranslationStatus(): Promise<TranslationStatus> {
+  return request('/api/translation/status', { fallback: () => demoTranslationStatus() });
+}
+
+/** 手动触发一轮翻译（「翻译今日」按钮）；一次跑完，上限/降级语义在服务端 */
+export function runTranslation(): Promise<TranslationRunResult> {
+  return request('/api/translation/run', { method: 'POST', timeout: 120_000, fallback: () => ({
+    requested: 0, translated: 0, skippedCjk: 0, failed: 0, capReached: false, degraded: true,
+  }) });
+}
+
+function demoTranslationStatus(): TranslationStatus {
+  return {
+    enabled: true,
+    llmConfigured: false,
+    dailyLimit: 500,
+    translatedToday: 0,
+    pending: 0,
+    inflight: false,
+    lastRunAt: null,
+    lastError: null,
+  };
+}
+
+// ------------------------------------------------------------------ 工程动态（t21）
+
+export function getExtractionStatus(): Promise<ExtractionStatus> {
+  return request('/api/extraction/status', { fallback: () => demoExtractionStatus() });
+}
+
+/** 懒触发/手动触发一轮 release 技术点抽取（LLM 未配置走规则兜底） */
+export function runExtraction(): Promise<ExtractionRunResult> {
+  return request('/api/extraction/run', { method: 'POST', timeout: 120_000, fallback: () => ({
+    requested: 0, extracted: 0, viaLlm: 0, viaRules: 0, failed: 0, capReached: false, degraded: true,
+  }) });
+}
+
+function demoExtractionStatus(): ExtractionStatus {
+  return {
+    enabled: true, llmConfigured: false, dailyLimit: 2000, usedToday: 0, pending: 0,
+    extractedTotal: 0, pointsTotal: 0, todayReleases: 0, inflight: false, lastRunAt: null, lastError: null,
+  };
+}
+
 export function exportUrl(format: 'csv' | 'json'): string {
   return `/api/export?format=${format}`;
+}
+
+// ------------------------------------------------------------------ 对话（POST /api/chat，SSE 流式）
+
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatSourceRef {
+  id?: string;
+  title: string;
+  url: string;
+  /** paper / patent / news / release / idea；未知值前端按无类型展示 */
+  kind?: string;
+  score?: number;
+}
+
+export interface ChatStatusUpdate {
+  /** 机器可读步骤名（retrieve / web / patent / idea …），前端仅作 key 用 */
+  step: string;
+  /** 已是中文的可读文案，如「正在检索 arXiv…」，直接展示 */
+  label: string;
+}
+
+export interface ChatDoneResult {
+  messageId: string;
+  toolsUsed: string[];
+  /** done 帧带回的会话 id（R2）：首次收到后前端才把 sessionId 写进 localStorage */
+  sessionId?: string;
+}
+
+export interface ChatErrorPayload {
+  code: string;
+  message: string;
+}
+
+export interface ChatStreamCallbacks {
+  onStatus?: (s: ChatStatusUpdate) => void;
+  onSources?: (items: ChatSourceRef[]) => void;
+  onToken?: (text: string) => void;
+  onDone?: (r: ChatDoneResult) => void;
+  onError?: (e: ChatErrorPayload) => void;
+}
+
+export interface ChatStreamOptions {
+  message: string;
+  /**
+   * 会话 id（R2）：由前端 crypto.randomUUID() 生成、首次 done 后持久化；
+   * 历史由后端按 sessionId 自取，页面不再随请求发 history
+   * （`history` 参数保留兼容旧后端，但页面不再传）。
+   */
+  sessionId?: string;
+  /** 最近几轮对话（不含当前这条 message）；只带合法角色与非空内容（兼容旧契约） */
+  history?: ChatHistoryMessage[];
+}
+
+function pickString(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined;
+}
+
+function asSourceList(v: unknown): ChatSourceRef[] {
+  if (!Array.isArray(v)) return [];
+  const out: ChatSourceRef[] = [];
+  for (const it of v) {
+    if (typeof it !== 'object' || it === null) continue;
+    const o = it as Record<string, unknown>;
+    const url = pickString(o.url);
+    const title = pickString(o.title) ?? url;
+    if (!url || !title) continue;
+    out.push({
+      ...(pickString(o.id) !== undefined ? { id: pickString(o.id) } : {}),
+      title,
+      url,
+      ...(pickString(o.kind) !== undefined ? { kind: pickString(o.kind) } : {}),
+      ...(typeof o.score === 'number' && Number.isFinite(o.score) ? { score: o.score } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * 对话流式接口。请求是普通 POST，响应是 text/event-stream：
+ *
+ *   event: status   data: {"step":"retrieve","label":"正在检索 arXiv…"}
+ *   event: sources  data: {"items":[{"title":"…","url":"…","kind":"paper"}]}
+ *   event: token    data: {"text":"…"}
+ *   event: done     data: {"messageId":"…","toolsUsed":["search"]}
+ *   event: error    data: {"code":"…","message":"…"}
+ *
+ * 解析规则：按 `\n\n` 分帧，buffer 跨 chunk 拼接；帧内 `event:` / `data:` 行
+ * （多行 data 用 \n 连接），`:` 开头的注释行与 `id:` / `retry:` 忽略。
+ * done / error 是终态：之后到达的帧一律丢弃。
+ *
+ * 错误口径：
+ * - 响应不是 SSE（HTTP 非 2xx，或 200 但 content-type 是 application/json）→
+ *   按现有错误信封解析并 **throw ApiError**（带 code / message），不回调 onError；
+ * - 流中途网络中断 → throw ApiError('network_error')；
+ * - 流内 event: error → 回调 onError（后端已明确告诉前端失败原因）；
+ * - 调用方主动 abort（signal.aborted）→ 静默返回，保留已收到的内容。
+ */
+export async function streamChat(
+  opts: ChatStreamOptions,
+  callbacks: ChatStreamCallbacks,
+  signal: AbortSignal,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: opts.message,
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        ...(opts.history && opts.history.length > 0 ? { history: opts.history } : {}),
+      }),
+      signal,
+    });
+  } catch (err) {
+    if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
+    throw new ApiError('network_error', '无法连接后端：/api/chat', 0);
+  }
+
+  const ctype = (res.headers.get('content-type') ?? '').toLowerCase();
+  const isSse = ctype.includes('text/event-stream');
+  if (!res.ok || !isSse) {
+    // 非 SSE 响应：尽力解析错误信封，按现有错误结构抛出
+    const text = await res.text().catch(() => '');
+    let parsed: unknown = null;
+    if (text.trim().length > 0) {
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        parsed = null;
+      }
+    }
+    if (!res.ok) throw errorFromBody(parsed, res.status);
+    if (typeof parsed === 'object' && parsed !== null && 'error' in parsed) {
+      throw errorFromBody(parsed, res.status);
+    }
+    throw new ApiError('bad_response', '对话接口没有返回 SSE 流', res.status);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new ApiError('bad_response', '对话响应没有可读流', res.status);
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finished = false;
+
+  const handleFrame = (frame: string): void => {
+    if (finished) return;
+    let event = '';
+    const dataLines: string[] = [];
+    for (const line of frame.split('\n')) {
+      if (line === '' || line.startsWith(':')) continue; // 空行 / SSE 注释
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+      // id: / retry: 本协议用不到，忽略
+    }
+    if (dataLines.length === 0) return;
+    let data: unknown = null;
+    try {
+      data = JSON.parse(dataLines.join('\n')) as unknown;
+    } catch {
+      return; // 半截 JSON：丢帧，不中断流
+    }
+    if (typeof data !== 'object' || data === null) return;
+    const o = data as Record<string, unknown>;
+    switch (event) {
+      case 'status': {
+        const label = pickString(o.label);
+        if (label) callbacks.onStatus?.({ step: pickString(o.step) ?? '', label });
+        break;
+      }
+      case 'sources': {
+        callbacks.onSources?.(asSourceList(o.items));
+        break;
+      }
+      case 'token': {
+        const text = pickString(o.text) ?? pickString(o.delta);
+        if (text) callbacks.onToken?.(text);
+        break;
+      }
+      case 'done': {
+        finished = true;
+        const tools = Array.isArray(o.toolsUsed)
+          ? o.toolsUsed.filter((t): t is string => typeof t === 'string')
+          : [];
+        callbacks.onDone?.({
+          messageId: pickString(o.messageId) ?? '',
+          toolsUsed: tools,
+          ...(pickString(o.sessionId) !== undefined ? { sessionId: pickString(o.sessionId) } : {}),
+        });
+        break;
+      }
+      case 'error': {
+        finished = true;
+        callbacks.onError?.({
+          code: pickString(o.code) ?? 'unknown',
+          message: pickString(o.message) ?? '生成失败',
+        });
+        break;
+      }
+      default:
+        break; // 未知事件忽略，向后兼容
+    }
+  };
+
+  try {
+    while (!finished) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx = buffer.indexOf('\n\n');
+      while (idx >= 0) {
+        handleFrame(buffer.slice(0, idx));
+        buffer = buffer.slice(idx + 2);
+        if (finished) break;
+        idx = buffer.indexOf('\n\n');
+      }
+    }
+    // 容错：后端漏发结尾空行时，把残余 buffer 当最后一帧处理
+    if (!finished && buffer.trim().length > 0) handleFrame(buffer);
+  } catch (err) {
+    if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
+    try {
+      await reader.cancel();
+    } catch {
+      // 连接已断，取消失败可忽略
+    }
+    throw new ApiError('network_error', '连接中断，已停止生成', 0);
+  }
+}
+
+// ------------------------------------------------------------------ 对话会话（R2）
+
+/** 最近 20 条会话摘要；列表是辅助信息，失败由调用方决定是否提示 */
+export function listChatSessions(): Promise<ChatSessionSummary[]> {
+  return request('/api/chat/sessions', { timeout: 10_000 });
+}
+
+/** 容忍裸数组与 {messages:[…]} 两种返回形状，逐条丢弃非合法消息 */
+function asSessionDetail(sessionId: string, v: unknown): ChatSessionDetail {
+  const raw = Array.isArray(v) ? v : typeof v === 'object' && v !== null && Array.isArray((v as { messages?: unknown }).messages)
+    ? ((v as { messages: unknown[] }).messages)
+    : [];
+  const messages: ChatSessionDetail['messages'] = [];
+  for (const it of raw) {
+    if (typeof it !== 'object' || it === null) continue;
+    const o = it as Record<string, unknown>;
+    const role = o.role === 'assistant' ? 'assistant' : o.role === 'user' ? 'user' : null;
+    const content = pickString(o.content);
+    if (!role || !content) continue;
+    const msg: ChatSessionMessage = {
+      role,
+      content,
+      ...(Array.isArray(o.toolsUsed)
+        ? { toolsUsed: o.toolsUsed.filter((t): t is string => typeof t === 'string') }
+        : {}),
+      ...(typeof o.sources === 'object' && o.sources !== null
+        ? { sources: o.sources as ChatSessionMessage['sources'] }
+        : {}),
+      ...(pickString(o.at) !== undefined ? { at: pickString(o.at) } : {}),
+    };
+    messages.push(msg);
+  }
+  return { sessionId, messages };
+}
+
+/** 加载一个会话的完整消息（恢复渲染用，引用 / 工具徽标一并还原） */
+export async function getChatSession(sessionId: string): Promise<ChatSessionDetail> {
+  const res = await request<unknown>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    timeout: 15_000,
+  });
+  return asSessionDetail(sessionId, res);
+}
+
+export function deleteChatSession(sessionId: string): Promise<void> {
+  return request(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
 }
 
 // ------------------------------------------------------------------ SSE

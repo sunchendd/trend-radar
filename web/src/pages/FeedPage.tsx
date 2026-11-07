@@ -2,7 +2,8 @@
  * 情报流（论文 / 新闻共用）：统计 → 搜索/筛选 → 卡片流 → 详情抽屉。
  *
  * `scope` 决定这一页**只看哪一类条目**：
- *   papers → kind=paper；news → kinds=news,release（Releases 与博客都属于工程信号）。
+ *   papers → kind=paper；news → kinds=news（RSS 新闻 + 技术博客；Releases 在查询层排除，
+ *   由「工程动态」页单独承载）。
  * 页面的 KPI 也按同一口径统计，避免把两类混在一起看（那样「今天新增」永远对不上）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
@@ -35,9 +36,11 @@ import {
 import { HIGH_SCORE, MID_SCORE } from '../lib/format';
 import type { Item, RunRecord, Source, Stats } from '../lib/types';
 import { FilterPanel } from '../components/FilterPanel';
+import { LangToggle } from '../components/LangToggle';
 import { Icon } from '../components/Icon';
 import { ItemCard } from '../components/ItemCard';
 import { ItemDrawer } from '../components/ItemDrawer';
+import { PaperReader } from '../reader/PaperReader';
 import { Drawer } from '../components/Overlay';
 import { ItemCardSkeleton } from '../components/Skeleton';
 import { StatBar } from '../components/StatBar';
@@ -101,6 +104,7 @@ export function FeedPage({
   const [collecting, setCollecting] = useState(false);
 
   const [selected, setSelected] = useState<Item | null>(null);
+  const [readerItem, setReaderItem] = useState<Item | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listTopRef = useRef<HTMLDivElement | null>(null);
@@ -292,7 +296,15 @@ export function FeedPage({
       toast.warn('演示模式下不导出', '演示数据在内存里，/api/export 需要真实后端。');
       return;
     }
-    window.open(exportUrl('csv'), '_blank', 'noopener');
+    // 侧边栏 sandbox 不放 allow-popups：window.open 会被静默拦截（点了没反应）。
+    // 改走程序化 <a download>：下载语义走 allow-downloads，不弹新窗口。
+    const a = document.createElement('a');
+    a.href = exportUrl('csv');
+    a.download = '';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }, [demo, toast]);
 
   const resetFilters = useCallback(() => {
@@ -380,16 +392,22 @@ export function FeedPage({
           onExport={onExport}
         />
 
-        {/* 口径说明：把这一页的统计边界写清楚，避免和全库口径混淆 */}
-        <p className="mt-1.5 text-[10px] leading-relaxed text-ink-3/85">
-          本页口径：<span className="text-ink-2">{label.kinds}</span> · 高分 ≥
-          <span className="num text-ink-2">{thresholds.high}</span> · 待判{' '}
-          <span className="num text-ink-2">
-            {thresholds.mid}–{thresholds.high}
-          </span>{' '}
-          · 「今日新增 / 近 7 天」只数本页口径下今天 / 近 7 天<strong className="font-medium text-ink-2">发布</strong>
-          的条目，不与全库混合
-        </p>
+        {/* 口径说明 + 语言切换：把这一页的统计边界写清楚，避免和全库口径混淆 */}
+        <div className="mt-1.5 flex items-start justify-between gap-3">
+          <p className="text-[10px] leading-relaxed text-ink-3/85">
+            本页口径：<span className="text-ink-2">{label.kinds}</span> · 高分 ≥
+            <span className="num text-ink-2">{thresholds.high}</span> · 待判{' '}
+            <span className="num text-ink-2">
+              {thresholds.mid}–{thresholds.high}
+            </span>{' '}
+            · 「今日新增 / 近 7 天」只数本页口径下今天 / 近 7 天<strong className="font-medium text-ink-2">发布</strong>
+            的条目，不与全库混合
+          </p>
+          <div className="mt-0.5 flex shrink-0 items-center gap-2">
+            <span className="text-[10px] text-ink-3/85">翻译</span>
+            <LangToggle compact />
+          </div>
+        </div>
 
         {/* 搜索 + 工具条 */}
         <div className="mt-3 flex items-center gap-2">
@@ -537,6 +555,7 @@ export function FeedPage({
                   source={sourceMap.get(item.sourceId)}
                   active={selected?.id === item.id}
                   onOpen={setSelected}
+                  onOpenReader={setReaderItem}
                 />
               ))}
 
@@ -627,7 +646,18 @@ export function FeedPage({
         <FilterPanel {...filterProps} showHeader={false} />
       </Drawer>
 
-      <ItemDrawer item={selected} source={sourceMap.get(selected?.sourceId ?? '')} onClose={closeDrawer} />
+      <ItemDrawer
+        item={selected}
+        source={sourceMap.get(selected?.sourceId ?? '')}
+        onClose={closeDrawer}
+        onOpenReader={(item) => {
+          setSelected(null);
+          setReaderItem(item);
+        }}
+      />
+
+      {/* 论文/专利阅读器：全屏覆盖层，打开即自动下载 PDF */}
+      {readerItem !== null ? <PaperReader item={readerItem} onClose={() => setReaderItem(null)} /> : null}
     </div>
   );
 }

@@ -50,10 +50,12 @@ export function mapDomainError(err: unknown): ApiException | undefined {
       return serviceUnavailable(code, message);
     // 输入不够/产物全不合格：调用方能自救，属于 422
     case 'no_items':
+    case 'paper_no_pdf':
     case 'all_invalid':
       return unprocessable(code, message, dropped === undefined ? undefined : { dropped });
     // 模型输出被截断或不是合法 JSON：上游的问题，502
     case 'llm_bad_output':
+    case 'download_failed':
     case 'llm_output_truncated':
       return badGateway(code, message, dropped === undefined ? undefined : { dropped });
     default:

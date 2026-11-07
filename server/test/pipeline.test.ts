@@ -25,6 +25,7 @@ const config: AppConfig = {
   // 注入了假 LLM，这里留空即可（真实路径会抛 LlmNotConfiguredError）
   llm: { baseUrl: '', apiKey: '', model: 'test-model', temperature: 0.7, maxTokens: 8000 },
   novelty: { command: '', agreeKick: false },
+  bark: { url: '', enabled: true },
 };
 
 const makeItem = (index: number, score: number, title: string): Item => ({

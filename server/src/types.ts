@@ -59,12 +59,30 @@ export interface Item {
   keywords: string[];
   /** arXiv/DOI 等外部主键，用于跨源去重 */
   externalId?: string;
+  /** LLM 中文标题（v3 迁移新增；未翻译/中文原文条目没有） */
+  titleZh?: string;
+  /** LLM 中文摘要 */
+  summaryZh?: string;
+  /** 翻译完成时间（ISO）；与 zhKey 配合做「内容变更重译」判定 */
+  translatedAt?: string;
+  /** release 技术点（t21：LLM/规则抽取的结构化中文要点；仅 release 条目可能有） */
+  pointsZh?: TechPoint[];
+  /** 抽取完成时间（ISO） */
+  pointsAt?: string;
 }
 
 export interface ScoreReason {
   rule: string;
   delta: number;
   detail: string;
+}
+
+/** release 技术点（t21）：一条中文一句话要点 + 技术分类 */
+export type TechCategory = '调度' | 'KV' | '投机' | '量化' | '算子' | '并行' | '硬件' | '其他';
+
+export interface TechPoint {
+  category: TechCategory;
+  zh: string;
 }
 
 // ---------------------------------------------------------------- 采集运行
@@ -240,6 +258,18 @@ export interface AppSettings {
     command: string;
     hasCommand: boolean;
   };
+  /** 自动中文翻译（论文/新闻标题+摘要） */
+  translation: {
+    enabled: boolean;
+    /** 每日翻译条目上限（防刷爆 LLM 配额） */
+    dailyLimit: number;
+  };
+  /** Bark 每日推送（iOS 通知）；未配置/关闭时整条链路静默 */
+  bark: {
+    /** 形如 https://api.day.app/<key>；空串 = 未配置 */
+    url: string;
+    enabled: boolean;
+  };
   /** 上次保存时间（ISO）；从未保存过为 null */
   updatedAt: string | null;
   /** 下一次定时刷新的时间（ISO）；未启用为 null */
@@ -263,4 +293,79 @@ export interface AppSettingsPatch {
   midScore?: number;
   llm?: { baseUrl?: string; model?: string; apiKey?: string };
   novelty?: { command?: string };
+  translation?: { enabled?: boolean; dailyLimit?: number };
+  bark?: { url?: string; enabled?: boolean };
+}
+
+// ---------------------------------------------------------------- 自动翻译
+
+/** GET /api/translation/status 的响应：设置页/列表页的翻译状态一眼可见 */
+export interface TranslationStatus {
+  /** 设置开关（关 = 采集后不自动翻译，手动触发也不跑） */
+  enabled: boolean;
+  /** LLM 是否已配置（未配置 = 功能降级，UI 给配置指引） */
+  llmConfigured: boolean;
+  /** 每日上限（条） */
+  dailyLimit: number;
+  /** 今天（本地时区）已翻译条数 */
+  translatedToday: number;
+  /** 当前待翻译条数（粗估，含「内容变更待重译」） */
+  pending: number;
+  /** 是否有一轮翻译正在跑 */
+  inflight: boolean;
+  /** 最近一轮完成时间（ISO）；从未跑过为 null */
+  lastRunAt: string | null;
+  /** 最近一轮的错误摘要（成功为 null） */
+  lastError: string | null;
+}
+
+/** POST /api/translation/run 的响应：一轮翻译的账目 */
+export interface TranslationRunResult {
+  /** 本轮取到的候选条数（已剔除中文原文/已翻译未变更） */
+  requested: number;
+  /** 实际写入译文条数 */
+  translated: number;
+  /** 中文原文跳过条数 */
+  skippedCjk: number;
+  /** LLM 未返回/解析失败的条数（留给下一轮重试） */
+  failed: number;
+  /** 因每日上限提前停止 */
+  capReached: boolean;
+  /** LLM 未配置时 true（本轮什么都没做） */
+  degraded: boolean;
+}
+
+// ---------------------------------------------------------------- 工程动态（t21）
+
+/** GET /api/extraction/status 的响应：release 技术点抽取状态一览 */
+export interface ExtractionStatus {
+  enabled: boolean;
+  llmConfigured: boolean;
+  dailyLimit: number;
+  /** 今日 LLM 消耗（翻译 + 抽取共用同一池） */
+  usedToday: number;
+  /** 待抽取 release 条数 */
+  pending: number;
+  /** 已抽取 release 总数 */
+  extractedTotal: number;
+  /** 技术点总条数 */
+  pointsTotal: number;
+  /** 今日新发版数（release 条目 fetched_at 口径） */
+  todayReleases: number;
+  /** 有一轮抽取在跑 */
+  inflight: boolean;
+  lastRunAt: string | null;
+  lastError: string | null;
+}
+
+/** POST /api/extraction/run 的响应：一轮抽取的账目 */
+export interface ExtractionRunResult {
+  requested: number;
+  /** 实际写入技术点的 release 条数 */
+  extracted: number;
+  /** LLM 路径处理的条数；rule 兜底条数 = extracted - viaLlm */
+  viaLlm: number;
+  failed: number;
+  capReached: boolean;
+  degraded: boolean;
 }

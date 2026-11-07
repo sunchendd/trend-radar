@@ -362,9 +362,13 @@ export async function generateIdeas(
 
   // 5 条选题的 JSON 实测要 6000+ tokens：沿用 config 里的 maxTokens（默认 8000），
   // 参考实现把 4200 提到 8000 就是因为 count=5 会被截断成不可解析。
+  // 思考型模型（GLM-5.3-Flash 等）的 reasoning token 也计入 max_tokens——实测 8000 预算
+  // 被思考吃掉 ~80%，正式 JSON 只剩 ~1500 必截断。所以这里给思考留足余量：至少 16000。
+  // 超时同步给 240s（思考 + 长输出实测 120s+ 长尾，120s 会在 chat 里炸成 internal_error）。
   const answer = await client.complete(messages, {
     temperature: config.llm?.temperature,
-    maxTokens: config.llm?.maxTokens,
+    maxTokens: Math.max(config.llm?.maxTokens ?? 8000, 16_000),
+    timeoutMs: 240_000,
   });
 
   let parsed: unknown;

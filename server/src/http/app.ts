@@ -21,6 +21,7 @@ import { toApiError } from './errors.js';
 import { createCollector, registerRoutes, type CollectorFn } from './routes.js';
 import { startScheduler, type Scheduler } from '../scheduler.js';
 import { SseHub } from './sse.js';
+import { pushDailyDigest } from '../push/bark.js';
 
 /** 与 package.json 同号；rootDir 限制不能直接 import 仓库根的 package.json */
 export const SERVER_VERSION = '0.1.0';
@@ -161,7 +162,21 @@ export async function startServer(config: AppConfig, options: BuildAppOptions = 
       startScheduler({
         config: input.config,
         settings: input.deps.getSettings(),
-        run: () => input.collect(),
+        run: async () => {
+          const run = await input.collect();
+          // Bark 每日推送（可选能力）：采集完成后读一次生效设置，未配置/关闭时静默；
+          // 失败只记日志——推送挂了绝不能让定时采集看起来失败
+          try {
+            await pushDailyDigest({
+              listItems: input.deps.listItems,
+              listIdeas: input.deps.listIdeas,
+              getSettings: input.deps.getSettings,
+            });
+          } catch (error) {
+            input.app.log.warn({ err: error }, 'Bark 推送失败（不影响采集）');
+          }
+          return run;
+        },
         // 定时采集失败只记日志：一次网络抖动不该带走常驻进程
         onError: (error: unknown) => input.app.log.error({ err: error }, '定时采集失败'),
       }));

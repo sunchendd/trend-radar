@@ -10,7 +10,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from './config.js';
 import { runNovelty, type CommandRunner } from './ideas/novelty.js';
 import { detectTrend, type TrendOutcome } from './ideas/trend.js';
-import { history, listWatches, recordSnapshot, type Watch } from './store/watches.js';
+import { history, listWatches, recordSnapshot, type GpSnapshotEntry, type Watch } from './store/watches.js';
+import { queryGooglePatents, type FetchLike } from './chat/tools.js';
 
 export interface WatchTrend {
   watch: Watch;
@@ -31,8 +32,10 @@ export interface SweepResult {
 export interface SweepOptions {
   /** 只跑这些巡检项（id）；不传则跑全部启用的 */
   watchIds?: string[];
-  /** 注入假 CLI，测试用 */
+  /** 注入假 CLI，测试用（仅 zhihuiya 引擎） */
   runCommand?: CommandRunner;
+  /** Google Patents 引擎用的 fetch；测试注入假实现，缺省全局 fetch */
+  fetch?: FetchLike;
   now?: () => Date;
   /** 每条巡检项最多跑几条检索式（巡检项一般只有 1 条） */
   limit?: number;
@@ -59,22 +62,44 @@ export async function sweepWatches(
   // 但巡检项之间是独立方向，合并成一次调用会让单点失败拖垮全部，所以逐个跑。
   for (const watch of targets) {
     try {
-      const records = await runNovelty(
-        config,
-        { queries: [watch.query], title: `巡检：${watch.query}` },
-        [watch.query],
-        {
-          ...(options.runCommand ? { runCommand: options.runCommand } : {}),
-          ...(options.limit ? { limit: options.limit } : {}),
-          now,
-        },
-      );
-      const first = records.find((record) => record.query === watch.query) ?? records[0];
+      let hits: number | null;
+      let topAssignees = '';
+      let detail: string | undefined;
+      if (watch.engine === 'google_patents') {
+        // 竞对监控：不走智慧芽 CLI，直接打 Google Patents XHR；query 原样透传
+        // （支持 assignee:华为 KV cache 语法）。抓不到/接口挂了必须抛错进 errors，
+        // 不能把失败记成 0 命中——那会污染趋势判读。
+        const fetchLike: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
+        const { items, error } = await queryGooglePatents(fetchLike, watch.query, 10);
+        if (error) throw new Error(`Google Patents：${error}`);
+        hits = items.length;
+        const top5: GpSnapshotEntry[] = items.slice(0, 5).map((item) => ({
+          title: item.title,
+          publicationNumber: String(item.meta['publication_number'] ?? ''),
+          filingDate: String(item.meta['filing_date'] ?? ''),
+        }));
+        detail = JSON.stringify({ top5 });
+      } else {
+        const records = await runNovelty(
+          config,
+          { queries: [watch.query], title: `巡检：${watch.query}` },
+          [watch.query],
+          {
+            ...(options.runCommand ? { runCommand: options.runCommand } : {}),
+            ...(options.limit ? { limit: options.limit } : {}),
+            now,
+          },
+        );
+        const first = records.find((record) => record.query === watch.query) ?? records[0];
+        hits = first?.hits ?? null;
+        topAssignees = first?.topAssignees ?? '';
+      }
       recordSnapshot(db, {
         watchId: watch.id,
         at: result.at,
-        hits: first?.hits ?? null,
-        topAssignees: first?.topAssignees ?? '',
+        hits,
+        topAssignees,
+        ...(detail !== undefined ? { detail } : {}),
       });
       result.checked += 1;
     } catch (error) {

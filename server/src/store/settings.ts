@@ -37,6 +37,10 @@ const FLAT_KEYS = [
   'llm.model',
   'llm.apiKey',
   'novelty.command',
+  'translation.enabled',
+  'translation.dailyLimit',
+  'bark.url',
+  'bark.enabled',
 ] as const;
 
 type FlatKey = (typeof FLAT_KEYS)[number];
@@ -51,6 +55,10 @@ export const SETTINGS_DEFAULTS = {
   dailyRefreshEnabled: false,
   highScore: 70,
   midScore: 50,
+  // 翻译默认开：LLM 未配置时整条链路静默降级，开了也没有副作用
+  // t24 复核为 2000：全量翻译口径下（41+ RSS 源日增数百条）500 不够
+  translationEnabled: true,
+  translationDailyLimit: 2000,
 } as const;
 
 /**
@@ -84,6 +92,10 @@ const flatten = (patch: AppSettingsPatch): Partial<Record<FlatKey, unknown>> => 
   'llm.model': patch.llm?.model,
   'llm.apiKey': patch.llm?.apiKey,
   'novelty.command': patch.novelty?.command,
+  'translation.enabled': patch.translation?.enabled,
+  'translation.dailyLimit': patch.translation?.dailyLimit,
+  'bark.url': patch.bark?.url,
+  'bark.enabled': patch.bark?.enabled,
 });
 
 /** 读回已保存的覆盖项；从未保存过时返回 `{}`（= 全用 config 默认值） */
@@ -131,6 +143,22 @@ export function readSettings(db: DatabaseSync): Partial<AppSettingsPatch> {
 
   const command = pick<string>('novelty.command');
   if (command !== undefined) patch.novelty = { command };
+
+  const translationEnabled = pick<boolean>('translation.enabled');
+  const translationDailyLimit = pick<number>('translation.dailyLimit');
+  if (translationEnabled !== undefined || translationDailyLimit !== undefined) {
+    patch.translation = {};
+    if (translationEnabled !== undefined) patch.translation.enabled = translationEnabled;
+    if (translationDailyLimit !== undefined) patch.translation.dailyLimit = translationDailyLimit;
+  }
+
+  const barkUrl = pick<string>('bark.url');
+  const barkEnabled = pick<boolean>('bark.enabled');
+  if (barkUrl !== undefined || barkEnabled !== undefined) {
+    patch.bark = {};
+    if (barkUrl !== undefined) patch.bark.url = barkUrl;
+    if (barkEnabled !== undefined) patch.bark.enabled = barkEnabled;
+  }
 
   return patch;
 }
@@ -203,6 +231,14 @@ export function resolveSettings(
       hasApiKey: apiKey.trim() !== '',
     },
     novelty: { command, hasCommand: commandAvailable(command) },
+    translation: {
+      enabled: patch.translation?.enabled ?? SETTINGS_DEFAULTS.translationEnabled,
+      dailyLimit: patch.translation?.dailyLimit ?? config.translation.dailyLimit,
+    },
+    bark: {
+      url: patch.bark?.url ?? config.bark.url,
+      enabled: patch.bark?.enabled ?? config.bark.enabled,
+    },
     updatedAt,
     nextRefreshAt: null,
     // 与 nextRunAt 共用 refreshModeOf：界面说的模式就是调度器真正在跑的模式
@@ -230,6 +266,16 @@ export function applySettingsToConfig(config: AppConfig, patch: Partial<AppSetti
     novelty: {
       ...config.novelty,
       command: patch.novelty?.command ?? config.novelty.command,
+    },
+    translation: {
+      ...config.translation,
+      enabled: patch.translation?.enabled ?? config.translation.enabled,
+      dailyLimit: patch.translation?.dailyLimit ?? config.translation.dailyLimit,
+    },
+    bark: {
+      ...config.bark,
+      url: patch.bark?.url ?? config.bark.url,
+      enabled: patch.bark?.enabled ?? config.bark.enabled,
     },
   };
 }

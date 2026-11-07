@@ -36,8 +36,13 @@ export type IconName =
   | 'table'
   | 'shield-off'
   | 'circle-slash'
+  | 'chat'
   | 'sun'
-  | 'moon';
+  | 'moon'
+  | 'pen'
+  | 'send'
+  | 'minus'
+  | 'book';
 
 const PATHS: Record<IconName, string[]> = {
   feed: ['M4 5.5h16', 'M4 12h16', 'M4 18.5h11'],
@@ -86,7 +91,20 @@ const PATHS: Record<IconName, string[]> = {
     'M18 6l1.6-1.6',
   ],
   moon: ['M20.5 14.4A8.6 8.6 0 0 1 9.6 3.5a8.6 8.6 0 1 0 10.9 10.9Z'],
+  pen: ['M4.5 19.5v-3.2L16.2 4.6a1.9 1.9 0 0 1 2.7 0l.5.5a1.9 1.9 0 0 1 0 2.7L7.7 19.5H4.5Z', 'M14.5 6.3l3.2 3.2'],
+  send: ['M20 4.5 4.5 11l5.5 2.5L12.5 20 20 4.5Z', 'M10 13.5l4.5-4.5'],
+  minus: ['M5 12h14'],
+  book: [
+    'M12 6.7c-1.9-1.5-4.4-2-8-2v12.6c3.6 0 6.1.5 8 2 1.9-1.5 4.4-2 8-2V4.7c-3.6 0-6.1.5-8 2Z',
+    'M12 6.7v12.6',
+  ],
   'circle-slash': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z', 'M6 18 18 6'],
+  chat: [
+    'M20.5 15a1.8 1.8 0 0 1-1.8 1.8H7.3L3.5 20.3V5.8a1.8 1.8 0 0 1 1.8-1.8h13.4a1.8 1.8 0 0 1 1.8 1.8Z',
+    'M8.5 10.4h.01',
+    'M12.2 10.4h.01',
+    'M15.9 10.4h.01',
+  ],
 };
 
 export interface IconProps {

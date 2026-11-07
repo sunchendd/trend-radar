@@ -54,7 +54,7 @@ export function useDemoMode(): boolean {
  * 情报流已拆成 `papers` / `news` 两页；旧链接 `#/feed` 由 `parseHash` 重写成 `#/papers`，
  * 所以这里不再保留 `'feed'` 别名——留一个"永远不被返回的名字"只会让人误用。
  */
-export type RouteName = 'papers' | 'news' | 'ideas' | 'watch' | 'system' | 'settings';
+export type RouteName = 'papers' | 'news' | 'releases' | 'ideas' | 'watch' | 'chat' | 'system' | 'settings';
 
 /** 兼容旧代码的别名（等价于 RouteName） */
 export type PageRoute = RouteName;
@@ -64,7 +64,7 @@ export interface Route {
   params: URLSearchParams;
 }
 
-const ROUTE_NAMES: PageRoute[] = ['papers', 'news', 'ideas', 'watch', 'system', 'settings'];
+const ROUTE_NAMES: PageRoute[] = ['papers', 'news', 'releases', 'ideas', 'watch', 'chat', 'system', 'settings'];
 
 /** 旧 hash 别名：`#/feed` 是历史书签（情报流拆成论文/资讯两页之前），不能白屏 */
 const LEGACY_ROUTES: Record<string, PageRoute> = { feed: 'papers' };
@@ -182,6 +182,27 @@ export function useHotkeys(bindings: Binding[], enabled = true): void {
 
 // ------------------------------------------------------------------ 复制
 
+/** 剪贴板写入（clipboard API 失败时退回 execCommand），成功返回 true */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function useCopy(resetMs = 1800): { copy: (text: string) => Promise<boolean>; copied: boolean } {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -195,32 +216,49 @@ export function useCopy(resetMs = 1800): { copy: (text: string) => Promise<boole
 
   const copy = useCallback(
     async (text: string) => {
-      try {
-        if (navigator.clipboard && window.isSecureContext) {
-          await navigator.clipboard.writeText(text);
-        } else {
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.style.position = 'fixed';
-          ta.style.opacity = '0';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          ta.remove();
-        }
-        setCopied(true);
+      const ok = await copyText(text);
+      setCopied(ok);
+      if (ok) {
         if (timer.current) clearTimeout(timer.current);
         timer.current = setTimeout(() => setCopied(false), resetMs);
-        return true;
-      } catch {
-        setCopied(false);
-        return false;
       }
+      return ok;
     },
     [resetMs],
   );
 
   return { copy, copied };
+}
+
+// ------------------------------------------------------------------ 外链
+
+/** openExternal 的 toast 面（只用到 info，方便调用方传 useToastFns 的结果） */
+export interface ExternalToast {
+  info: (title: string, detail?: string) => void;
+}
+
+/**
+ * 在侧边栏 iframe（sandbox 不含 allow-popups）里安全地打开原文外链。
+ *
+ * 直接 window.open 会被 sandbox **静默拦截**（返回 null，点了没反应）。
+ * 降级链：① window.open 正常 → 开新窗口（独立浏览器里仍可用）；
+ * ② 被拦截 → 复制链接 + toast 提示；③ 剪贴板也失败 → prompt 弹出可全选的
+ * URL（sandbox 有 allow-modals，prompt 可用）。不添加 allow-popups：
+ * 面板内任何出口都不能把 Harness 窗口带到别的地址去。
+ */
+export function openExternal(url: string, toast?: ExternalToast): void {
+  const win = window.open(url, '_blank', 'noopener');
+  if (win) {
+    win.opener = null;
+    return;
+  }
+  void copyText(url).then((ok) => {
+    if (ok) {
+      toast?.info('已复制链接', '侧边栏里不能开新窗口，原文链接已复制到剪贴板。');
+    } else {
+      window.prompt('侧边栏里不能开新窗口，请全选复制链接：', url);
+    }
+  });
 }
 
 // ------------------------------------------------------------------ 统计轮询
@@ -331,21 +369,24 @@ export function useScoreBands(intervalMs = 30_000, refreshKey = 0): ScoreBands {
 
 // ------------------------------------------------------------------ 论文 / 新闻：按类型分区的取数
 
-export type ScopeMode = 'papers' | 'news';
+export type ScopeMode = 'papers' | 'news' | 'releases';
 
 /**
  * 两个页面各自的类型口径。
- * 论文页只查 `kind=paper`；资讯页查 `kinds=news,release`（GitHub Releases 与博客
- * 在库里是两种 kind，但对用户是同一件事：工程信号）。
+ * 论文页只查 `kind=paper`；新闻页只查 `kinds=news`（RSS 新闻 + 技术博客，含 flashinfer）。
+ * Releases（kind=release）自 t19 起从新闻页的查询层排除：数据源保留、照常打分入库，
+ * 独立展示由「工程动态」页承载（t21）——news 页不再混排 release。
  */
 export const SCOPE_KINDS: Record<ScopeMode, ItemKind[]> = {
   papers: ['paper'],
-  news: ['news', 'release'],
+  news: ['news'],
+  releases: ['release'],
 };
 
 export const SCOPE_LABEL: Record<ScopeMode, { title: string; kinds: string; empty: string }> = {
   papers: { title: '论文', kinds: '论文源（arXiv）', empty: '论文库' },
-  news: { title: '新闻', kinds: 'Releases + 博客', empty: '资讯库' },
+  news: { title: '新闻', kinds: 'RSS 新闻 + 技术博客（不含 Releases）', empty: '资讯库' },
+  releases: { title: '工程动态', kinds: 'GitHub Releases（vLLM/SGLang/TensorRT-LLM）', empty: '发版库' },
 };
 
 function sortItems(sort: SortKey, a: Item, b: Item): number {

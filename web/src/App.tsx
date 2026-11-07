@@ -11,8 +11,10 @@ import { ToastProvider } from './components/Toast';
 import { subscribeEvents, type StreamEvent } from './lib/api';
 import { useDemoMode, useHashRoute, useHotkeys, type RouteName } from './lib/hooks';
 import type { IdeaWithVerdict } from './lib/types';
+import { ChatPage } from './pages/ChatPage';
 import { IdeasPage } from './pages/IdeasPage';
 import { NewsPage } from './pages/NewsPage';
+import { ReleasesPage } from './pages/ReleasesPage';
 import { PapersPage } from './pages/PapersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SystemPage } from './pages/SystemPage';
@@ -58,7 +60,8 @@ export function App(): JSX.Element {
       { key: '2', run: () => go('news') },
       { key: '3', run: () => go('ideas') },
       { key: '4', run: () => go('watch') },
-      { key: '5', run: () => go('system') },
+      { key: '5', run: () => go('chat') },
+      { key: '6', run: () => go('system') },
       { key: ',', run: () => go('settings') },
       { key: '?', run: () => setHelpOpen((v) => !v) },
     ],
@@ -98,6 +101,8 @@ export function App(): JSX.Element {
               <PapersPage route={route} demo={demo} liveNonce={live.nonce} onHelp={() => setHelpOpen(true)} />
             ) : route.name === 'news' ? (
               <NewsPage route={route} demo={demo} liveNonce={live.nonce} onHelp={() => setHelpOpen(true)} />
+            ) : route.name === 'releases' ? (
+              <ReleasesPage demo={demo} liveNonce={live.nonce} />
             ) : route.name === 'settings' ? (
               <SettingsPage
                 liveNonce={live.nonce}
@@ -108,6 +113,8 @@ export function App(): JSX.Element {
               <IdeasPage route={route} navigate={go} liveNonce={live.nonce} liveIdea={live.idea} />
             ) : route.name === 'watch' ? (
               <WatchPage liveNonce={live.nonce} navigate={go} />
+            ) : route.name === 'chat' ? (
+              <ChatPage navigate={go} />
             ) : (
               <SystemPage liveNonce={live.nonce} />
             )}

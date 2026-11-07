@@ -11,10 +11,20 @@ import type { VerdictSummary } from '../ideas/verdict.js';
 import type { AppSettings, AppSettingsPatch, Idea, Item, ItemQuery, NoveltyRecord, RunRecord } from '../types.js';
 import { nextRunAt, refreshModeOf, type Scheduler } from '../scheduler.js';
 import type { HttpDeps } from './deps.js';
-import { ApiException, notFound, parse, serviceUnavailable } from './errors.js';
+import { ApiException, badGateway, mapDomainError, notFound, parse, serviceUnavailable, unprocessable } from './errors.js';
 import type { SseHub } from './sse.js';
 import { disclosureFilename, toDisclosureMarkdown } from '../ideas/disclosure.js';
 import { buildDocx } from '../ideas/docx.js';
+import { createLlm, type LlmClient } from '../ideas/llm.js';
+import { runChat } from '../chat/orchestrator.js';
+import { CHAT_SSE_HEADERS, createChatSseWriter } from '../chat/sse.js';
+import { chatGate } from '../chat/gate.js';
+import { runPaperAsk } from '../papers/ask.js';
+import { ANNOTATION_COLORS } from '../store/papers.js';
+import { createReadStream } from 'node:fs';
+import { openChatStore, type ChatStore, type ChatStoredSource } from '../store/chat-store.js';
+import type { WatchEngine } from '../store/watches.js';
+import { pushBark } from '../push/bark.js';
 
 const DEFAULT_LIMIT = 30;
 const EXPORT_LIMIT = 5000;
@@ -110,6 +120,24 @@ const settingsPatchSchema = z
       })
       .optional(),
     novelty: z.object({ command: z.string().trim().max(500).optional() }).optional(),
+    translation: z
+      .object({
+        enabled: z.boolean().optional(),
+        dailyLimit: z.number().int().min(0).max(100_000, '最多 100000 条/日').optional(),
+      })
+      .optional(),
+    bark: z
+      .object({
+        // 空串 = 清除 URL（推送随之静默）
+        url: z
+          .string()
+          .trim()
+          .max(500)
+          .refine((value) => value === '' || /^https?:\/\//i.test(value), '必须是 http(s) 地址')
+          .optional(),
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
   })
   .refine((body) => Object.keys(body).length > 0, { message: '至少提供一个可修改字段' })
   .refine((body) => body.midScore === undefined || body.highScore === undefined || body.midScore <= body.highScore, {
@@ -180,6 +208,69 @@ const noveltyBodySchema = z.object({
 const noveltyAutoBodySchema = z.object({
   queries: z.array(z.string().trim().min(1).max(200)).min(1).max(8).optional(),
 });
+
+const chatMessageSchema = z.object({
+  role: z.enum(['user', 'assistant'], { errorMap: () => ({ message: '只能是 user 或 assistant' }) }),
+  content: z.string().trim().min(1).max(4000),
+});
+
+const chatBodySchema = z.object({
+  message: z.string().trim().min(1, 'message 不能为空').max(2000),
+  history: z.array(chatMessageSchema).max(12).optional(),
+  // 带 sessionId = 持久化会话模式（服务端取历史、双向落库）；不带的旧模式完全兼容
+  sessionId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{8,64}$/, '只能是字母/数字/下划线/连字符，长度 8-64')
+    .optional(),
+});
+
+
+// ---------------------------------------------------------------- 论文阅读器
+
+const colorEnum = z.enum(ANNOTATION_COLORS, {
+  errorMap: () => ({ message: `高亮色只能是 ${ANNOTATION_COLORS.join(' / ')}` }),
+});
+
+/** 高亮矩形归一化到页面（0–1），随缩放/窗口不变 */
+const rectSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0).max(1),
+  h: z.number().min(0).max(1),
+});
+
+const annotationCreateSchema = z.object({
+  page: z.number().int().min(1).max(100_000),
+  rects: z.array(rectSchema).min(1, '至少一个选区矩形').max(200),
+  text: z.string().max(16_000).optional(),
+  note: z.string().max(16_000).optional(),
+  color: colorEnum.optional(),
+});
+
+const annotationPatchSchema = z
+  .object({
+    note: z.string().max(16_000).optional(),
+    color: colorEnum.optional(),
+  })
+  .refine((body) => body.note !== undefined || body.color !== undefined, {
+    message: '至少提供 note/color 之一',
+  });
+
+const paperAskBodySchema = z.object({
+  question: z.string().trim().min(1, 'question 不能为空').max(2000),
+  page: z.number().int().min(1).max(100_000).optional(),
+  pageText: z.string().max(30_000).optional(),
+  selection: z.string().max(10_000).optional(),
+  history: z.array(chatMessageSchema).max(8).optional(),
+});
+
+/** 会话模式下回灌给模型的 history 条数（与旧模式 history 上限一致） */
+const CHAT_HISTORY_LIMIT = 12;
+/** 单会话明细返回的消息上限 */
+const CHAT_SESSION_MESSAGES = 200;
+/** 会话列表返回条数 */
+const CHAT_SESSIONS_LIMIT = 20;
 
 // ---------------------------------------------------------------- 采集幂等
 
@@ -252,6 +343,17 @@ export interface RouteContext {
 
 export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
   const { config, deps, hub, collect } = ctx;
+
+  /**
+   * chat 会话存储：懒打开（第一次用到会话/草案才连库），onClose 统一释放。
+   * 与主库同一个 dataDir 文件、独立连接 + WAL，绝不碰 db.ts 的迁移链。
+   */
+  let chatStoreInstance: ChatStore | undefined;
+  const getChatStore = (): ChatStore => (chatStoreInstance ??= openChatStore(config.dataDir));
+  app.addHook('onClose', async () => {
+    chatStoreInstance?.close();
+    chatStoreInstance = undefined;
+  });
 
   app.get('/api/health', async () => ({
     ok: true as const,
@@ -329,7 +431,13 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
   const watchBodySchema = z.object({
     query: z.string().trim().min(4, '检索式至少 4 个字符').max(80),
     note: z.string().trim().max(200).optional(),
-  });
+    // 规范值是 google_patents（下划线）；同时接受前端在发的连字符写法，入口统一规范化。
+    // transform 的 Input≠Output，与 kindsQuerySchema 同款：显式收回输出类型
+    engine: z
+      .enum(['zhihuiya', 'google_patents', 'google-patents'])
+      .transform((value): WatchEngine => (value === 'google-patents' ? 'google_patents' : value))
+      .optional(),
+  }) as unknown as z.ZodType<{ query: string; note?: string; engine?: WatchEngine }>;
 
   const watchPatchSchema = z.object({ enabled: z.boolean() });
 
@@ -471,6 +579,29 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
 
   app.get('/api/runs', async () => deps.listRuns(RUNS_PAGE));
 
+  // ---- 自动中文翻译（t18）：设置页给开关/上限/手动触发，列表页给状态角标 ----
+  app.get('/api/translation/status', async () => deps.translationStatus());
+
+  app.post('/api/translation/run', async () => {
+    try {
+      return await deps.runTranslation();
+    } catch (cause) {
+      // ApiException（如 translation_disabled 422）照原样冒泡；其余按统一规则翻译
+      throw mapDomainError(cause) ?? cause;
+    }
+  });
+
+  // ---- 工程动态（t21）：release 技术点抽取（LLM 优先/规则兜底） ----
+  app.get('/api/extraction/status', async () => deps.extractionStatus());
+
+  app.post('/api/extraction/run', async () => {
+    try {
+      return await deps.runExtraction();
+    } catch (cause) {
+      throw mapDomainError(cause) ?? cause;
+    }
+  });
+
   app.get('/api/export', async (req, reply) => {
     const { format } = parse(exportQuerySchema, req.query);
     // 导出不分页：走 store 的 exportItems（内部有硬上限），不能拿 listItems 的 200 上限凑
@@ -583,6 +714,312 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
     const idea = withVerdict(written, deps);
     hub.broadcast('idea', idea);
     return idea;
+  });
+
+
+  // ---------------------------------------------------------------- 论文阅读器
+
+  /**
+   * 触发论文 PDF 下载（幂等）：阅读器打开时自动调用，也可手动重试。
+   * 返回最终 PaperInfo（status=ready/failed），failed 时 error 是可读原因。
+   */
+  app.post('/api/items/:id/paper', async (req) => {
+    const { id } = parse(idParams, req.params);
+    return deps.downloadPaper(id);
+  });
+
+  /** 下载状态查询：阅读器用它做进度轮询，也用于恢复「已下载」标记 */
+  app.get('/api/items/:id/paper', async (req) => {
+    const { id } = parse(idParams, req.params);
+    if (!deps.getItem(id)) throw notFound(`条目 ${id} 不存在`);
+    return deps.getPaperStatus(id);
+  });
+
+  /** PDF 原文流：阅读器 canvas 渲染的数据源（inline，浏览器可直接预览/另存） */
+  app.get('/api/items/:id/paper/file', async (req, reply) => {
+    const { id } = parse(idParams, req.params);
+    const file = deps.getPaperFile(id);
+    if (!file) throw notFound(`该条目的 PDF 尚未下载或已失效，请先触发下载`);
+    reply
+      .header('content-type', 'application/pdf')
+      .header('content-length', file.bytes)
+      .header('content-disposition', `inline; filename="${file.itemId}.pdf"`)
+      // 下载后文件不可变：短缓存能让翻回上一页时秒开，又不会憋住「重新下载」
+      .header('cache-control', 'private, max-age=600');
+    return reply.send(createReadStream(file.path));
+  });
+
+  // ---- 高亮 / 笔记标注：按条目隔离，annotation id 全局唯一 ----
+
+  app.get('/api/items/:id/annotations', async (req) => {
+    const { id } = parse(idParams, req.params);
+    if (!deps.getItem(id)) throw notFound(`条目 ${id} 不存在`);
+    return deps.listPaperAnnotations(id);
+  });
+
+  app.post('/api/items/:id/annotations', async (req, reply) => {
+    const { id } = parse(idParams, req.params);
+    const body = parse(annotationCreateSchema, req.body ?? {});
+    const annotation = deps.addPaperAnnotation(id, body);
+    return reply.code(201).send(annotation);
+  });
+
+  app.patch('/api/items/:id/annotations/:aid', async (req) => {
+    const { id, aid } = parse(z.object({ id: idParams.shape.id, aid: idParams.shape.id }), req.params);
+    const patch = parse(annotationPatchSchema, req.body ?? {});
+    const updated = deps.updatePaperAnnotation(id, aid, patch);
+    if (!updated) throw notFound(`标注 ${aid} 不存在`);
+    return updated;
+  });
+
+  app.delete('/api/items/:id/annotations/:aid', async (req) => {
+    const { id, aid } = parse(z.object({ id: idParams.shape.id, aid: idParams.shape.id }), req.params);
+    if (!deps.removePaperAnnotation(id, aid)) throw notFound(`标注 ${aid} 不存在`);
+    return { ok: true as const, id: aid };
+  });
+
+  /**
+   * 选中文本提问（SSE）：帧契约与 /api/chat 相同（status/token/done/error），
+   * 上下文 = 当前页文本 + 选中文本，不落库、不进全局会话。
+   */
+  app.post('/api/items/:id/paper/ask', async (req, reply) => {
+    const { id } = parse(idParams, req.params);
+    const body = parse(paperAskBodySchema, req.body ?? {});
+    const item = deps.getItem(id);
+    if (!item) throw notFound(`条目 ${id} 不存在`);
+    if (!deps.isLlmConfigured()) {
+      throw serviceUnavailable('llm_not_configured', 'LLM 未配置（LLM_BASE_URL / LLM_API_KEY），论文提问不可用');
+    }
+    // 与 chat 共用并发闸：一条 LLM 流很贵，论文提问没有理由绕开限额
+    if (!chatGate.tryAcquire()) {
+      throw new ApiException(429, 'chat_busy', '当前对话并发已达上限（2），请等已有对话结束后再试');
+    }
+
+    let llm: LlmClient;
+    try {
+      llm = deps.createLlmClient
+        ? deps.createLlmClient()
+        : createLlm(config);
+    } catch (cause) {
+      chatGate.release();
+      throw mapDomainError(cause) ?? serviceUnavailable('llm_not_configured', 'LLM 客户端创建失败，请检查 LLM 配置');
+    }
+
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, CHAT_SSE_HEADERS);
+    const writer = createChatSseWriter((chunk) => {
+      if (res.writableEnded || res.destroyed) throw new Error('paper ask SSE 连接已关闭');
+      res.write(chunk);
+    });
+    const abort = new AbortController();
+    const onClose = (): void => abort.abort();
+    res.on('close', onClose);
+
+    try {
+      // status 帧给前端一个「正在思考」的指示；step 语义复用 chat 契约里的 plan
+      writer.status('plan', '正在结合当前页内容思考…');
+      await runPaperAsk(
+        llm,
+        {
+          title: item.title,
+          abstract: item.summary,
+          page: body.page ?? 1,
+          pageText: body.pageText ?? '',
+          selection: body.selection ?? '',
+        },
+        body.history ?? [],
+        { token: (text) => writer.token(text) },
+        { signal: abort.signal },
+      );
+      writer.done({ messageId: `paper-ask-${Date.now().toString(36)}`, toolsUsed: ['paper_ask'] });
+    } catch (error) {
+      if (!abort.signal.aborted) {
+        const mapped = error instanceof ApiException ? error : mapDomainError(error);
+        if (mapped) writer.error(mapped.code, mapped.message);
+        else {
+          app.log.error({ err: error }, '论文提问失败');
+          writer.error('internal_error', 'internal server error');
+        }
+      }
+    } finally {
+      res.off('close', onClose);
+      abort.abort();
+      chatGate.release();
+      if (!res.writableEnded) res.end();
+    }
+  });
+
+  // ---------------------------------------------------------------- chat（SSE 流式对话）
+
+  /**
+   * POST /api/chat：决策循环 + 流式合成，全程经 SSE 帧推给前端。
+   * 帧契约（顺序不保证，除 done/error 恰好一帧收尾）：
+   *   status  {"step","label"}   —— 阶段进度，多次
+   *   sources {"items":[…]}      —— 证据全量（覆盖式），工具每次产出后发
+   *   token   {"text"}           —— 回答增量，多次
+   *   done    {"messageId","toolsUsed","sessionId"?} —— 恰好一帧，随后关闭；
+   *             带 sessionId 持久化模式才回带 sessionId
+   *   error   {"code","message"} —— 中途失败恰好一帧，随后关闭
+   * 校验失败 / 503 / 429 发生在 hijack 之前，仍是普通 JSON 错误响应。
+   *
+   * 持久化语义：body 带 sessionId 时忽略请求里的 history（服务端取该会话最近
+   * CHAT_HISTORY_LIMIT 条），user 消息立即落库，回答完成后 assistant 消息
+   * （含 toolsUsed 与覆盖式最后一份 sources）落库；不带 sessionId 完全不落库。
+   */
+  app.post('/api/chat', async (req, reply) => {
+    const body = parse(chatBodySchema, req.body ?? {});
+    if (!deps.isLlmConfigured()) {
+      throw serviceUnavailable('llm_not_configured', 'LLM 未配置（LLM_BASE_URL / LLM_API_KEY），对话功能不可用');
+    }
+    // 并发闸必须在 hijack 之前占：429 chat_busy 是普通 JSON 错误
+    if (!chatGate.tryAcquire()) {
+      throw new ApiException(429, 'chat_busy', '当前对话并发已达上限（2），请等已有对话结束后再试');
+    }
+
+    let llm: LlmClient;
+    try {
+      // 工厂走 deps（settings 覆盖后的生效配置）；deps 未提供时退回 env 基线配置
+      llm = deps.createLlmClient ? deps.createLlmClient() : createLlm(config);
+    } catch (cause) {
+      chatGate.release();
+      throw mapDomainError(cause) ?? serviceUnavailable('llm_not_configured', 'LLM 客户端创建失败，请检查 LLM 配置');
+    }
+
+    // 会话持久化：带 sessionId 才激活；user 消息先落库（后续对话能续上）
+    const store = body.sessionId ? getChatStore() : undefined;
+    const sessionId = body.sessionId;
+    const history = store ? store.history(sessionId!, CHAT_HISTORY_LIMIT) : body.history ?? [];
+    if (store) store.appendMessage({ sessionId: sessionId!, role: 'user', content: body.message });
+
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, CHAT_SSE_HEADERS);
+    // 写入兜底：连接已坏时抛错，让 writer 进入 closed 状态静默丢弃后续帧
+    const writer = createChatSseWriter((chunk) => {
+      if (res.writableEnded || res.destroyed) throw new Error('chat SSE 连接已关闭');
+      res.write(chunk);
+    });
+    const abort = new AbortController();
+    // 客户端断开必须挂在 reply.raw（连接级）：req.raw 的 'close' 在请求体读完时
+    // 就会触发（Node ≥15 的 IncomingMessage 语义），会把正常请求当成断开掐死。
+    // reply.raw 的 'close' 只在「连接断开」或「我们 end()」时发生，后者无害。
+    const onClose = (): void => abort.abort();
+    res.on('close', onClose);
+
+    // 覆盖式 sources 的最后一份：assistant 消息落库时随存
+    let lastSources: ChatStoredSource[] = [];
+
+    try {
+      const outcome = await runChat(
+        {
+          llm,
+          listItems: deps.listItems,
+          listSources: deps.listSources,
+          stats: deps.stats,
+          listWatches: deps.listWatches,
+          generateIdeas: deps.generateIdeas,
+          getIdea: deps.getIdea,
+          // HttpDeps.autoNovelty 带 queries 参数，chat 工具固定跑全部检索式
+          autoNovelty: (ideaId: string) => deps.autoNovelty(ideaId, undefined),
+          summarizeVerdict: deps.summarizeVerdict,
+          noveltyCommandAvailable: deps.getSettings().novelty.hasCommand,
+          saveClaims: (ideaId, content) => getChatStore().saveClaims(ideaId, content),
+        },
+        { message: body.message, history },
+        {
+          status: (step, label) => writer.status(step, label),
+          sources: (items) => {
+            lastSources = items;
+            writer.sources(items);
+          },
+          token: (text) => writer.token(text),
+        },
+        { signal: abort.signal },
+      );
+      if (store) {
+        store.appendMessage({
+          sessionId: sessionId!,
+          role: 'assistant',
+          content: outcome.answer,
+          toolsUsed: outcome.toolsUsed,
+          sources: lastSources,
+        });
+      }
+      writer.done({
+        messageId: outcome.messageId,
+        toolsUsed: outcome.toolsUsed,
+        ...(sessionId ? { sessionId } : {}),
+      });
+    } catch (error) {
+      if (!abort.signal.aborted) {
+        // 客户端已断开时不再补错误帧；领域错误按统一规则翻译，未知错误固定安全文案
+        const mapped = error instanceof ApiException ? error : mapDomainError(error);
+        if (mapped) writer.error(mapped.code, mapped.message);
+        else {
+          app.log.error({ err: error }, 'chat 处理失败');
+          writer.error('internal_error', 'internal server error');
+        }
+      }
+    } finally {
+      res.off('close', onClose);
+      abort.abort();
+      chatGate.release();
+      if (!res.writableEnded) res.end();
+    }
+  });
+
+  // ---- chat 会话：列表 / 明细 / 删除（持久化模式的数据出口） ----
+  app.get('/api/chat/sessions', async () => getChatStore().sessions(CHAT_SESSIONS_LIMIT));
+
+  app.get('/api/chat/sessions/:id', async (req) => {
+    const { id } = parse(idParams, req.params);
+    const session = getChatStore().session(id, CHAT_SESSION_MESSAGES);
+    if (!session) throw notFound(`会话 ${id} 不存在`);
+    return session;
+  });
+
+  app.delete('/api/chat/sessions/:id', async (req) => {
+    const { id } = parse(idParams, req.params);
+    if (!getChatStore().removeSession(id)) throw notFound(`会话 ${id} 不存在`);
+    return { ok: true as const };
+  });
+
+  // ---- 权利要求草案读取（draft_claims 工具落库的出口） ----
+  app.get('/api/ideas/:id/claims', async (req) => {
+    const { id } = parse(idParams, req.params);
+    const claims = getChatStore().getClaims(id);
+    if (!claims) throw notFound(`选题 ${id} 还没有权利要求草案`);
+    return claims;
+  });
+
+  // ---- Bark 测试推送：设置页「测试推送」按钮；带 url = 先测后存 ----
+  const pushTestSchema = z.object({
+    url: z
+      .string()
+      .trim()
+      .max(500)
+      .refine((value) => value === '' || /^https?:\/\//i.test(value), '必须是 http(s) 地址')
+      .optional(),
+  });
+
+  app.post('/api/push/test', async (req) => {
+    const body = parse(pushTestSchema, req.body ?? {});
+    const requestedUrl = body.url?.trim() ?? '';
+    if (requestedUrl === '') {
+      const settings = deps.getSettings();
+      if (!settings.bark.enabled || settings.bark.url.trim() === '') {
+        throw unprocessable('bark_not_configured', 'Bark 推送未启用或未配置 URL（设置页 bark.url / env BARK_URL）');
+      }
+    }
+    const targetUrl = requestedUrl !== '' ? requestedUrl : deps.getSettings().bark.url;
+    const fetchLike = deps.fetchLike ?? ((input: string, init?: RequestInit) => fetch(input, init));
+    try {
+      await pushBark(fetchLike, targetUrl, '情报雷达测试推送', `推送链路正常（${new Date().toISOString()}）`);
+    } catch (error) {
+      throw badGateway('bark_push_failed', error instanceof Error ? error.message : String(error));
+    }
+    return { ok: true as const };
   });
 
   // ---------------------------------------------------------------- SSE

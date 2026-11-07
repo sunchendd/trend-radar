@@ -25,6 +25,8 @@ export interface FetchDeps {
   sources?: readonly Source[];
   /** 单源保留上限，默认 config.limitPerSource */
   limitPerSource?: number;
+  /** 新闻类 RSS（tags 带 news）单源上限，默认 config.limitPerNewsSource；实际取 min(limitPerSource, 本值) */
+  limitPerNewsSource?: number;
   /** 并发上限，默认 6 */
   concurrency?: number;
   /** 单请求超时，默认 20s */
@@ -38,6 +40,8 @@ export interface FetchDeps {
   hostPacingMs?: Record<string, number>;
   /** 单 URL 的最大尝试次数，默认 2（第二次是退避重试） */
   attempts?: number;
+  /** 等待实现；默认真实 setTimeout。测试注入假时钟以断言重试间隔 */
+  sleep?: (ms: number) => Promise<void>;
   /** 时间源，测试注入固定时间用 */
   now?: () => Date;
 }
@@ -112,7 +116,7 @@ async function runPool<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T
   return results;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleepDefault = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** AbortSignal.timeout 抛的是 TimeoutError（DOMException），不同运行时 name 略有差异，两种都认 */
 function isTimeoutError(error: unknown): boolean {
@@ -129,14 +133,21 @@ function hostOf(url: string): string {
 }
 
 export async function fetchAllSources(
-  config: Pick<AppConfig, 'limitPerSource'>,
+  // limitPerNewsSource 可选：probe 等单源采样方不关心新闻上限（兜底 20）
+  config: Pick<AppConfig, 'limitPerSource'> & Partial<Pick<AppConfig, 'limitPerNewsSource'>>,
   deps: FetchDeps = {},
 ): Promise<FetchAllResult> {
   const fetchImpl: FetchLike = deps.fetch ?? ((input, init) => fetch(input, init));
+  const sleep = deps.sleep ?? sleepDefault;
   const now = deps.now ?? (() => new Date());
   const timeoutMs = Math.max(1, deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const attempts = Math.max(1, deps.attempts ?? DEFAULT_ATTEMPTS);
   const limitPerSource = Math.max(1, deps.limitPerSource ?? config.limitPerSource);
+  // 新闻类 RSS 的单源上限：min(通用上限, 新闻上限)。背景新闻不值得吃满 40 条配额，
+  // 41 个新闻源全吃满会把一轮采集的入库量放大一个量级（默认 news 20 vs 通用 40）。
+  const newsLimit = Math.max(1, deps.limitPerNewsSource ?? config.limitPerNewsSource ?? 20);
+  const capFor = (source: Source): number =>
+    source.tags.includes('news') ? Math.min(limitPerSource, newsLimit) : limitPerSource;
   const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_CONCURRENCY);
   const pacing: Record<string, number> = deps.hostPacingMs ?? { 'export.arxiv.org': 3000 };
   const hostTimeouts: Record<string, number> = deps.hostTimeoutsMs ?? DEFAULT_HOST_TIMEOUTS;
@@ -174,9 +185,15 @@ export async function fetchAllSources(
         if (!response.ok) {
           if (RETRYABLE_STATUS.has(response.status) && attempt < attempts) {
             lastError = new Error(`HTTP ${response.status}`);
-            // 429/503 常常带 Retry-After，照着等比盲等更礼貌也更有效；封顶 5s 免得采集卡死
+            // arXiv 429 一律等满 5s：官方限速 1req/3s，服务端掐请求比 Retry-After 承诺的更狠，
+            // 照头等只会连环 429（实测）。其余可重试状态码维持 Retry-After 优先、封顶 5s
             const retryAfter = Number(response.headers.get('retry-after'));
-            const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(5000, retryAfter * 1000) : 600 * attempt;
+            const wait =
+              response.status === 429
+                ? 5000
+                : Number.isFinite(retryAfter) && retryAfter > 0
+                  ? Math.min(5000, retryAfter * 1000)
+                  : 600 * attempt;
             await sleep(wait);
             continue;
           }
@@ -217,7 +234,7 @@ export async function fetchAllSources(
     try {
       const body = await getText(source.url);
       const parsed = source.kind === 'arxiv' ? parseArxivAtom(body, source, fetchedAt) : parseFeed(body, source, fetchedAt);
-      const items = parsed.slice(0, limitPerSource);
+      const items = parsed.slice(0, capFor(source));
       timings.push({ sourceId: source.id, ms: Math.round(performance.now() - startMs), items: items.length });
       return items;
     } catch (error) {

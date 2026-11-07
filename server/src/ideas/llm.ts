@@ -68,12 +68,36 @@ export interface ChatOptions {
   timeoutMs?: number;
   /** 覆盖默认重试次数 */
   retries?: number;
+  /**
+<<<<<<< ours
+   * 思考模式开关（t24）：'disabled' 时请求体带 thinking:{type:"disabled"}。
+   * 智谱 GLM-5.3-Flash 等思考型模型支持该参数——翻译/抽取这类机械任务关掉思考
+   * 实测省 ~90% token 与等待（10 token 出译文 vs 思考模式 144 token）。
+   * 不传 = 不携带该字段（端点用自身默认行为，非思考型模型也兼容）。
+   */
+  thinking?: 'disabled' | 'enabled';
+  /**
+   * 外部取消信号（例如 HTTP 客户端断开）。**仅 completeStream 生效**：
+   * 与超时信号合并监听，触发后立即中断流；complete() 不读它，行为保持不变。
+   */
+  signal?: AbortSignal;
 }
 
 export interface LlmClient {
   /** 实际使用的模型名，写日志/落库便于回溯 */
   readonly model: string;
   complete(messages: ChatMessage[], options?: ChatOptions): Promise<string>;
+  /**
+   * 流式补全：请求体 `stream:true`，逐行解析 SSE 增量并经 onToken 回调；
+   * 返回值 = 全部增量按序拼接（与 onToken 收到的内容一致：不重、不漏）。
+   * 重试/超时/错误分类与 complete() 同规则——但只覆盖「拿到响应头之前」的阶段；
+   * 流一旦开始消费就不再重试（token 可能已经发出，重试必然重复输出）。
+   */
+  completeStream(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    onToken: (delta: string) => void,
+  ): Promise<string>;
 }
 
 /** 可注入依赖，测试里换成假 fetch / 假 sleep，不打真网络。 */
@@ -287,6 +311,57 @@ function readContent(payload: unknown): string {
   return '';
 }
 
+export interface StreamDelta {
+  /** true = 服务端宣告结束（`data: [DONE]`） */
+  done: boolean;
+  /** 本行携带的文本增量；没有增量为空串 */
+  delta: string;
+}
+
+/**
+ * 解析流式响应的一行 SSE。
+ *
+ * 必须容忍的现实情况：空行（SSE 事件分隔）、`:` 开头的注释行（keepalive 心跳）、
+ * data 后没有空格、delta.content 为分段数组（OpenAI 新式端点）、单个端点
+ * 混发 message.content 的非标准增量。解析不了的 data 行直接跳过而不是抛错——
+ * 一条脏行不该杀掉整条已经吐了一半的回答。
+ */
+export function parseStreamDelta(line: string): StreamDelta | undefined {
+  const trimmed = line.trim();
+  if (trimmed === '' || trimmed.startsWith(':')) return undefined;
+  if (!trimmed.startsWith('data:')) return undefined;
+  const payload = trimmed.slice(5).trim();
+  if (payload === '[DONE]') return { done: true, delta: '' };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  const choices = (parsed as { choices?: unknown })?.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return { done: false, delta: '' };
+  const first = choices[0] as {
+    delta?: { content?: unknown };
+    message?: { content?: unknown };
+    text?: unknown;
+  };
+  const content = first?.delta?.content ?? first?.message?.content ?? first?.text;
+  if (typeof content === 'string') return { done: false, delta: content };
+  if (Array.isArray(content)) {
+    return {
+      done: false,
+      delta: content
+        .map((part) => {
+          const text = (part as { text?: unknown })?.text;
+          return typeof text === 'string' ? text : '';
+        })
+        .join(''),
+    };
+  }
+  return { done: false, delta: '' };
+}
+
 /**
  * 创建客户端。**未配置即抛**：让 API 层在发出任何请求前就能返回 503，
  * 而不是等 120s 超时后报一个看不懂的 fetch failed。
@@ -312,6 +387,8 @@ export function createLlm(config: AppConfig, deps: LlmDeps = {}): LlmClient {
         temperature: options.temperature ?? config.llm.temperature,
         max_tokens: options.maxTokens ?? config.llm.maxTokens,
         stream: false,
+        // 思考模式开关（t24）：仅显式传入时携带，避免影响不支持该参数的端点
+        ...(options.thinking !== undefined ? { thinking: { type: options.thinking } } : {}),
       });
 
       let lastError: Error | null = null;
@@ -363,6 +440,120 @@ export function createLlm(config: AppConfig, deps: LlmDeps = {}): LlmClient {
           }
           throw err;
         }
+      }
+
+      throw lastError ?? new Error('LLM 调用失败：未知原因');
+    },
+
+    async completeStream(messages, options = {}, onToken) {
+      if (messages.length === 0) throw new Error('LLM 调用缺少 messages');
+
+      const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const retries = options.retries ?? DEFAULT_RETRIES;
+      const body = JSON.stringify({
+        model,
+        messages,
+        temperature: options.temperature ?? config.llm.temperature,
+        max_tokens: options.maxTokens ?? config.llm.maxTokens,
+        stream: true,
+      });
+
+      let lastError: Error | null = null;
+
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        let response: Response;
+        try {
+          // 外部取消与超时合并监听：任一触发都掐断请求。Node >=20 提供 AbortSignal.any。
+          const signal = options.signal
+            ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal])
+            : AbortSignal.timeout(timeoutMs);
+          response = await doFetch(url, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              authorization: `Bearer ${config.llm.apiKey}`,
+            },
+            body,
+            signal,
+          });
+        } catch (error) {
+          // 外部主动取消：原样抛出，上层（路由）按「客户端已断开」处理，不报超时
+          if (options.signal?.aborted) throw error;
+          const err = error instanceof Error ? error : new Error(String(error));
+          if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+            throw new Error(`LLM 请求超时（${timeoutMs}ms）：${url}`);
+          }
+          lastError = err;
+          if (attempt < retries) {
+            await sleep(BACKOFF_BASE_MS * 2 ** attempt);
+            continue;
+          }
+          throw err;
+        }
+
+        // 429 / 5xx 与 complete() 同规则：退避重试；此时还没吐 token，重试安全
+        if (response.status === 429 || response.status >= 500) {
+          const detail = await response.text().catch(() => '');
+          lastError = new LlmHttpError(response.status, detail);
+          if (attempt < retries) {
+            await sleep(BACKOFF_BASE_MS * 2 ** attempt);
+            continue;
+          }
+          throw lastError;
+        }
+        if (!response.ok) {
+          const detail = await response.text().catch(() => '');
+          throw new LlmHttpError(response.status, detail);
+        }
+
+        // 进入流：此后不再重试——token 可能已经通过 onToken 发出，重来必然重复
+        if (!response.body) throw new Error('LLM 流式响应缺少 body');
+        const full: string[] = [];
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finished = false;
+        try {
+          for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+            buffer += decoder.decode(chunk, { stream: true });
+            let newlineAt = buffer.indexOf('\n');
+            while (newlineAt >= 0) {
+              const line = buffer.slice(0, newlineAt);
+              buffer = buffer.slice(newlineAt + 1);
+              const delta = parseStreamDelta(line);
+              if (delta) {
+                if (delta.done) {
+                  finished = true;
+                  break;
+                }
+                if (delta.delta !== '') {
+                  full.push(delta.delta);
+                  onToken(delta.delta);
+                }
+              }
+              newlineAt = buffer.indexOf('\n');
+            }
+            if (finished) break;
+          }
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+          const err = error instanceof Error ? error : new Error(String(error));
+          if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+            throw new Error(`LLM 请求超时（${timeoutMs}ms）：${url}`);
+          }
+          throw err;
+        }
+        // 兜底：有的端点不发 [DONE] 就直接关流，把缓冲区里最后一整行也消费掉
+        if (!finished) {
+          const tail = parseStreamDelta(buffer);
+          if (tail && !tail.done && tail.delta !== '') {
+            full.push(tail.delta);
+            onToken(tail.delta);
+          }
+        }
+
+        const text = full.join('');
+        if (text.trim() === '') throw new Error('LLM 返回了空内容（流式响应无有效增量）');
+        return text;
       }
 
       throw lastError ?? new Error('LLM 调用失败：未知原因');

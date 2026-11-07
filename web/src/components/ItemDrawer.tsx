@@ -1,11 +1,13 @@
 /**
  * 情报详情抽屉：摘要全文 + 打分明细（为什么这条值得读，一分一分摆出来）。
  */
-import { useMemo, type JSX } from 'react';
+import { useMemo, useSyncExternalStore, type JSX } from 'react';
 import type { Item, Source } from '../lib/types';
 import { KIND_META, absTime, cleanReason, relTime, signed } from '../lib/format';
 import { displayTitle } from './ItemCard';
-import { useCopy } from '../lib/hooks';
+import { useCopy, openExternal } from '../lib/hooks';
+import { useToastFns } from './Toast';
+import { getListLang, subscribeListLang } from '../lib/lang';
 import { ScoreRing } from './charts';
 import { Icon } from './Icon';
 import { Drawer } from './Overlay';
@@ -15,12 +17,18 @@ export function ItemDrawer({
   item,
   source,
   onClose,
+  onOpenReader,
 }: {
   item: Item | null;
   source?: Source;
   onClose: () => void;
+  /** 提供时详情页脚显示「阅读全文」：进 PDF 阅读器（论文/专利直读，自动下载） */
+  onOpenReader?: (item: Item) => void;
 }): JSX.Element | null {
   const { copy, copied } = useCopy();
+  const toast = useToastFns();
+  // 列表语言视图与卡片同源：中文视图优先展示 LLM 译文，没有译文回落原文
+  const lang = useSyncExternalStore(subscribeListLang, getListLang);
 
   const maxAbs = useMemo(() => {
     if (!item) return 1;
@@ -31,6 +39,8 @@ export function ItemDrawer({
 
   const kind = KIND_META[item.kind];
   const sum = item.scoreReasons.reduce((s, r) => s + r.delta, 0);
+  const useZh = lang === 'zh' && (item.titleZh !== undefined || item.summaryZh !== undefined);
+  const titleText = useZh && item.titleZh ? item.titleZh : displayTitle(item, source);
 
   return (
     <Drawer
@@ -53,11 +63,23 @@ export function ItemDrawer({
       }
       footer={
         <div className="flex items-center gap-2">
+          {onOpenReader !== undefined ? (
+            <button type="button" className="btn btn-accent flex-1" onClick={() => onOpenReader(item)}>
+              <Icon name="book" size={13} />
+              阅读全文
+            </button>
+          ) : null}
           <a
             href={item.url}
             target="_blank"
             rel="noreferrer noopener"
-            className="btn btn-accent flex-1"
+            onClick={(e) => {
+              // 侧边栏 sandbox 无 allow-popups：默认跳转会被静默拦截。
+              // 交给 openExternal 处理（能开则开，不能开降级复制链接）。
+              e.preventDefault();
+              openExternal(item.url, toast);
+            }}
+            className="btn flex-1"
             title="在新标签页打开原文"
           >
             <Icon name="external" size={13} />
@@ -78,7 +100,8 @@ export function ItemDrawer({
       <div className="px-4 pt-4 pb-5">
         <div className="flex items-start gap-4">
           <h2 className="min-w-0 flex-1 text-[16px] leading-[1.45] font-semibold tracking-[-0.01em] text-ink">
-            {displayTitle(item, source)}
+            {titleText}
+            {useZh && item.titleZh ? <span className="ml-1.5 align-middle text-[10px] font-normal text-ink-3/70">译</span> : null}
           </h2>
           <ScoreRing score={item.score} size={52} />
         </div>
@@ -97,8 +120,19 @@ export function ItemDrawer({
         </div>
 
         <section className="mt-5">
-          <SectionHead title="摘要" hint={item.summary.includes('。') ? '中文原文' : '原文'} />
-          <p className="text-[12.5px] leading-[1.75] whitespace-pre-wrap text-ink-2">{item.summary}</p>
+          <SectionHead
+            title="摘要"
+            hint={useZh && item.summaryZh ? '中文译文 · LLM' : item.summary.includes('。') ? '中文原文' : '原文'}
+          />
+          <p className="text-[12.5px] leading-[1.75] whitespace-pre-wrap text-ink-2">
+            {useZh && item.summaryZh ? item.summaryZh : item.summary}
+          </p>
+          {useZh && item.summaryZh ? (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[10.5px] text-ink-3 hover:text-ink-2">查看原文</summary>
+              <p className="mt-1.5 text-[11.5px] leading-[1.7] whitespace-pre-wrap text-ink-3">{item.summary}</p>
+            </details>
+          ) : null}
         </section>
 
         <section className="mt-5">

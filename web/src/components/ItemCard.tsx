@@ -2,12 +2,16 @@
  * 情报卡片：一眼看出「值不值得读」。
  * 结构固定为 元信息行 → 标题 → 关键词 → 两条打分理由，右侧相关度环。
  */
+import { useSyncExternalStore } from 'react';
 import type { JSX } from 'react';
 import type { Item, Source } from '../lib/types';
 import { KIND_META, TONE_COLOR, absTime, cleanReason, relTime, scoreTone, signed } from '../lib/format';
+import { useToastFns } from './Toast';
 import { ScoreRing } from './charts';
 import { Icon } from './Icon';
 import { Pill } from './primitives';
+import { openExternal } from '../lib/hooks';
+import { getListLang, subscribeListLang } from '../lib/lang';
 
 /**
  * release 类条目的标题常常只是版本号（「v0.5.22」），单独显示毫无信息量。
@@ -26,18 +30,26 @@ export function ItemCard({
   source,
   active,
   onOpen,
+  onOpenReader,
 }: {
   item: Item;
   source?: Source;
   active?: boolean;
   onOpen: (item: Item) => void;
+  /** 论文条目提供时，卡片右上角多一个「阅读全文」入口（进 PDF 阅读器） */
+  onOpenReader?: (item: Item) => void;
 }): JSX.Element {
   const kind = KIND_META[item.kind];
-  const title = displayTitle(item, source);
   const tone = scoreTone(item.score);
   const reasons = item.scoreReasons.slice(0, 2);
   const keywords = item.keywords.slice(0, 5);
   const restKeywords = item.keywords.length - keywords.length;
+  const toast = useToastFns();
+  // 中文视图：有译文用译文，没有回落原文（不给空态）
+  const lang = useSyncExternalStore(subscribeListLang, getListLang);
+  const useZh = lang === 'zh' && item.titleZh !== undefined;
+  const title = useZh && item.titleZh ? item.titleZh : displayTitle(item, source);
+  const summaryText = useZh && item.summaryZh ? item.summaryZh : item.summary;
 
   return (
     <article
@@ -85,6 +97,7 @@ export function ItemCard({
 
           <h3 className="clamp-2 mt-1.5 text-[13.5px] leading-[1.5] font-medium tracking-[-0.005em] text-ink transition-colors group-hover:text-ink">
             {title}
+            {useZh ? <span className="ml-1 align-middle text-[9px] font-normal text-ink-3/70">译</span> : null}
           </h3>
 
           {reasons.length > 0 ? (
@@ -102,7 +115,7 @@ export function ItemCard({
               ))}
             </ul>
           ) : (
-            <p className="clamp-2 mt-2 text-[11px] leading-relaxed text-ink-3">{item.summary}</p>
+            <p className="clamp-2 mt-2 text-[11px] leading-relaxed text-ink-3">{summaryText}</p>
           )}
 
           {keywords.length > 0 ? (
@@ -119,17 +132,39 @@ export function ItemCard({
 
         <div className="flex shrink-0 flex-col items-end justify-between gap-2">
           <ScoreRing score={item.score} size={42} />
-          <a
-            href={item.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            onClick={(e) => e.stopPropagation()}
-            title="打开原文（新标签）"
-            aria-label="打开原文"
-            className="flex h-6 w-6 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-fill-2 hover:text-accent"
-          >
-            <Icon name="external" size={13} />
-          </a>
+          <div className="flex items-center gap-0.5">
+            {item.kind === 'paper' && onOpenReader !== undefined ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenReader(item);
+                }}
+                title="阅读全文（PDF 阅读器）"
+                aria-label="阅读全文"
+                className="flex h-6 w-6 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-fill-2 hover:text-accent"
+              >
+                <Icon name="book" size={13} />
+              </button>
+            ) : null}
+            <a
+              href={item.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              onClick={(e) => {
+                // 侧边栏 sandbox 无 allow-popups：默认跳转会被静默拦截。
+                // 交给 openExternal 处理（能开则开，不能开降级复制链接）。
+                e.preventDefault();
+                e.stopPropagation();
+                openExternal(item.url, toast);
+              }}
+              title="打开原文（新标签）"
+              aria-label="打开原文"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-fill-2 hover:text-accent"
+            >
+              <Icon name="external" size={13} />
+            </a>
+          </div>
         </div>
       </div>
     </article>

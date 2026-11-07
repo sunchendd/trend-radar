@@ -30,6 +30,7 @@ const makeConfig = (over: Partial<AppConfig['novelty']> = {}): AppConfig => ({
   llm: { baseUrl: '', apiKey: '', model: 'm', temperature: 0.7, maxTokens: 8000 },
   // 不带斜杠 → 跳过文件存在性检查，交给注入的 runner
   novelty: { command: 'batch-search-shim', agreeKick: false, ...over },
+  bark: { url: '', enabled: true },
 });
 
 const idea = {

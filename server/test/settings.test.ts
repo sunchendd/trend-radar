@@ -37,6 +37,8 @@ const makeConfig = (over: Partial<AppConfig> = {}): AppConfig => ({
   ttlDays: 180,
   llm: { baseUrl: '', apiKey: '', model: 'deepseek-chat', temperature: 0.7, maxTokens: 8000 },
   novelty: { command: '', agreeKick: false },
+  translation: { enabled: true, dailyLimit: 500 },
+  bark: { url: '', enabled: true },
   ...over,
 });
 

@@ -52,11 +52,79 @@ Base: `http://127.0.0.1:8787`，全部 `Content-Type: application/json`（SSE �
 | POST | `/api/ideas/:id/novelty` | `{ query, hits, topAssignees?, note?, site? }` | 手工登记一条查新记录，同时按 `verdict()` 重算 status |
 | POST | `/api/ideas/:id/novelty/auto` | `{ queries?: string[] }` | 调智慧芽 CLI 批量查新并写回；未配置返回 503 `code=novelty_not_configured` |
 
+### 论文阅读器（PDF 下载 / 高亮笔记 / 选中文本提问）
+
+| 方法 | 路径 | body | 说明 |
+|---|---|---|---|
+| POST | `/api/items/:id/paper` | — | **自动下载论文 PDF**（幂等，在飞请求复用同一个 Promise）。返回 `PaperInfo {itemId,status:'ready'\|'failed',originUrl,bytes,error,downloadedAt,updatedAt}`。来源解析：arXiv externalId/url → `arxiv.org/pdf/<id>`；`.pdf` 直链（含 OpenReview `/pdf?id=`）；Google Patents 页面解析 patentimages 链接。魔数 `%PDF` 校验，单文件上限 64MB，失败如实写 `status:'failed' + error` |
+| GET | `/api/items/:id/paper` | — | 下载状态查询（阅读器进度轮询用）；进程重启遗留的僵尸 `pending` 自动改判 `failed`（可重试） |
+| GET | `/api/items/:id/paper/file` | — | PDF 原文流（`application/pdf`，inline）；未下载/已失效 404。文件存于 `<dataDir>/papers/<itemId>.pdf`，TTL 清条目时连带回收 |
+| GET | `/api/items/:id/annotations` | — | `PaperAnnotation[] {id,itemId,page,rects:[{x,y,w,h}],text,note,color,createdAt,updatedAt}`；rects 归一化到页面（0–1），缩放不变 |
+| POST | `/api/items/:id/annotations` | `{page,rects,text?,note?,color?}` | 新增高亮/笔记，201；`color` 限 `#f2b357 #35e7c5 #7aa7f7 #ff8fa3 #c3a6ff`；rect 非法 400 |
+| PATCH | `/api/items/:id/annotations/:aid` | `{note?,color?}` | 改笔记/换色；404 时表示标注不存在或不属于该条目 |
+| DELETE | `/api/items/:id/annotations/:aid` | — | 删除标注 |
+| POST | `/api/items/:id/paper/ask` | `{question,page?,pageText?,selection?,history?}` | **选中文本提问**（SSE，帧契约与 `/api/chat` 相同：status/token/done/error）。上下文 = 当前页全文 + 选中文本，不落库；与 chat 共用并发闸（2），超限 429 `chat_busy`；LLM 未配置 503 |
+
 ## 实时
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/events` | SSE；事件 `run`(采集完成)、`items`(新增条目数)、`idea`(选题变更)，data 为对应 JSON |
+
+## 对话（自然语言检索 / 论文 / 专利 / 选题）
+
+| 方法 | 路径 | body | 说明 |
+|---|---|---|---|
+| POST | `/api/chat` | `{ message: string(1–2000), history?: {role,content}[](≤12) }` | **SSE 流式**对话（`text/event-stream`）；LLM 决策循环 ≤4 轮，四工具：`search_local`(库内) / `search_arxiv`(实时) / `search_patents`(Google Patents) / `generate_ideas`(落库) |
+
+成功时逐帧推送（`event: <name>\ndata: <json>\n\n`）：
+
+| 事件 | data | 次数 |
+|---|---|---|
+| `status` | `{ step, label }`，step ∈ plan/search_local/search_arxiv/search_patents/generate_ideas/compose | 多次（前端进度行） |
+| `sources` | `{ items: [{title, url, kind, meta}] }`，kind ∈ paper/news/release/patent/idea | 多次，**覆盖式**（前端整表替换、按 url 去重编号） |
+| `token` | `{ text }` 回答增量 | 多次 |
+| `done` | `{ messageId, toolsUsed[] }` | 恰好一次，随后连接关闭 |
+| `error` | `{ code, message }` | 中途失败时一次，随后关闭 |
+
+校验失败 / 前置失败走**普通 JSON 错误**（`content-type: application/json`，前端按 content-type 区分）：
+`400 validation_error`；LLM 未配置 `503 llm_not_configured`；生成/合成失败 `502 llm_bad_output`；
+并发在飞 >2 时 `429 chat_busy`。客户端断开即取消后端生成（合成流随时掐断，决策轮在轮间边界检查）。
+
+### 对话会话持久化
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/chat` | body 可带 `sessionId`（`/^[A-Za-z0-9_-]{8,64}$/`）：有则服务端取该会话最近 12 条当 history（忽略请求 history）、user 即时落库、done 前 assistant 落库；无则兼容旧模式不落库。done 帧带 `sessionId` |
+| GET | `/api/chat/sessions` | 最近 20 个会话：`[{sessionId, title(首条用户消息≤40字), lastAt, messageCount}]` |
+| GET | `/api/chat/sessions/:id` | `{sessionId, messages: [{role, content, toolsUsed?, sources?, at}]}`，上限 200 条 |
+| DELETE | `/api/chat/sessions/:id` | 删除会话，`{ok:true}` |
+
+### 对话新工具（R2）
+
+| 工具 | 参数 | 说明 |
+|---|---|---|
+| `export_disclosure` | `{ideaId, format?: 'md'\|'docx'}` | 返回交底书下载链接（`/api/ideas/:id/disclosure`） |
+| `check_novelty` | `{ideaId}` | 智慧芽 CLI 已配置→真查新并落库；否则摘要已有查新记录判读；两者皆无→引导配置/手动登记 |
+| `draft_claims` | `{ideaId}` | 基于选题 problem/solution/effect 生成独立权利要求 1 条 + 从属 3–5 条，落库并在对话中返回 |
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/ideas/:id/claims` | 最近一次权利要求草案 `{content, at}`；无则 404 |
+
+### 巡检引擎（R2）
+
+- `POST /api/watches` body 增加可选 `engine`：`zhihuiya`（默认）| `google_patents`（兼容连字符写法 `google-patents`，入口规范化）
+- `google_patents` 引擎不走智慧芽 CLI：用 Google Patents 免鉴权接口跑命中数 + Top5 快照，query 原样透传
+  （可尝试 `assignee:公司名` 过滤，**实验性**——GP 对该字段组合语义多变，建议先用纯关键词验证命中量再收窄）；
+  请求失败进 `errors`，**绝不把失败记成 0 命中**
+- `listWatches` 返回带 `engine` 与 `lastSnapshot: {at?, count?, topTitles?: string[]}`
+
+### Bark 推送（R2，可选）
+
+- 配置：env `BARK_URL`（形如 `https://api.day.app/<key>`）或设置页（`PUT /api/settings` 的 `bark: {url?, enabled?}`，url 空串=清除）
+- 定时采集完成后自动推日报（近 24h 高分 Top5 + 新增选题数）；未配置/禁用静默跳过；失败仅记日志
+- `POST /api/push/test`：body `{}`（测已保存配置）或 `{url}`（先测后存场景）
 
 ## 约定
 

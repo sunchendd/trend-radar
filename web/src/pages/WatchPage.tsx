@@ -25,7 +25,7 @@ import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState } from '../components/States';
 import { ListRowSkeleton } from '../components/Skeleton';
 import { useToastFns } from '../components/Toast';
-import { Pill, Spinner } from '../components/primitives';
+import { Pill, Segmented, Spinner } from '../components/primitives';
 
 const LEVEL_META: Record<TrendLevel, { label: string; cls: string; hint: string }> = {
   surge: { label: '升温', cls: 'text-warn border-warn/40 bg-warn/10', hint: '有人在同一处布专利，值得据此出选题' },
@@ -35,6 +35,24 @@ const LEVEL_META: Record<TrendLevel, { label: string; cls: string; hint: string 
   cool: { label: '降温', cls: 'text-ink-3 border-line bg-fill-1', hint: '竞争减少，也可能方向过时' },
   baseline: { label: '基线', cls: 'text-ink-3 border-dashed border-line', hint: '首次巡检，下次才有环比' },
 };
+
+type WatchEngineChoice = 'zhihuiya' | 'google-patents';
+
+/** 引擎徽标：GP 用强调色区分，智慧芽走中性默认；未知 engine 值按原文展示 */
+function engineMeta(engine: string | undefined): { label: string; color: string; bg: string; border: string } {
+  if (engine === 'google-patents') {
+    return {
+      label: 'Google Patents',
+      color: 'var(--color-accent)',
+      bg: 'color-mix(in oklab, var(--color-accent) 12%, transparent)',
+      border: 'color-mix(in oklab, var(--color-accent) 32%, transparent)',
+    };
+  }
+  if (engine === undefined || engine === '' || engine === 'zhihuiya') {
+    return { label: '智慧芽', color: 'var(--color-ink-3)', bg: 'var(--color-fill-1)', border: 'var(--color-line)' };
+  }
+  return { label: engine, color: 'var(--color-ink-3)', bg: 'var(--color-fill-1)', border: 'var(--color-line)' };
+}
 
 /** 命中数折线（手写 SVG，不引图表库）：解析失败的点断开，不连线 */
 function Sparkline({ history }: { history: { at: string; hits: number | null }[] }): JSX.Element {
@@ -90,6 +108,8 @@ export function WatchPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
   const [draft, setDraft] = useState('');
+  /** 新增巡检用的检索引擎：智慧芽为默认（现状不变），GP 不需要智慧芽配置 */
+  const [draftEngine, setDraftEngine] = useState<WatchEngineChoice>('zhihuiya');
   const [busy, setBusy] = useState(false);
   const [sweeping, setSweeping] = useState(false);
   const [lastSweep, setLastSweep] = useState<SweepResult | null>(null);
@@ -120,7 +140,7 @@ export function WatchPage({
     }
     setBusy(true);
     try {
-      await addWatch(query);
+      await addWatch(query, undefined, draftEngine);
       setDraft('');
       await load();
       toast.ok('已加入巡检', '跑一轮巡检后才有命中数基线');
@@ -129,7 +149,7 @@ export function WatchPage({
     } finally {
       setBusy(false);
     }
-  }, [draft, load, toast]);
+  }, [draft, draftEngine, load, toast]);
 
   const onSweep = useCallback(async () => {
     setSweeping(true);
@@ -228,6 +248,26 @@ export function WatchPage({
             </button>
           </div>
         </form>
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="text-[11px] text-ink-3">检索引擎</span>
+          <Segmented<WatchEngineChoice>
+            options={[
+              { value: 'zhihuiya', label: '智慧芽' },
+              { value: 'google-patents', label: 'Google Patents' },
+            ]}
+            value={draftEngine}
+            onChange={(v) => {
+              if (v) setDraftEngine(v);
+            }}
+          />
+          {draftEngine === 'google-patents' ? (
+            <span className="text-[10.5px] text-accent">
+              无需智慧芽配置；assignee 过滤建议拉丁名（如 assignee:(huawei) 投机解码），中文公司名 GP 支持不稳定，建议先用纯关键词验证命中量
+            </span>
+          ) : (
+            <span className="text-[10.5px] text-ink-3">默认引擎，走智慧芽 CLI（需已配置）</span>
+          )}
+        </div>
         {lastSweep ? (
           <p className="mt-2 text-[10.5px] text-ink-3">
             {relTime(lastSweep.at)} · 检查 {lastSweep.checked} 个 · 失败 {lastSweep.skipped} 个 · 异动{' '}
@@ -263,6 +303,14 @@ export function WatchPage({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[12.5px] text-ink">{watch.query}</span>
+                      {(() => {
+                        const em = engineMeta(watch.engine);
+                        return (
+                          <Pill color={em.color} bg={em.bg} border={em.border} title={`检索引擎：${em.label}`}>
+                            {em.label}
+                          </Pill>
+                        );
+                      })()}
                       {meta ? (
                         <span
                           className={`rounded border px-1.5 py-[1px] text-[10px] ${meta.cls}`}
@@ -282,6 +330,16 @@ export function WatchPage({
                       {trend ? trend.trend.headline : `最近命中 ${watch.lastHits ?? '—'} · 巡检 ${watch.checks} 次`}
                       {watch.lastCheckedAt ? ` · ${relTime(watch.lastCheckedAt)}` : ''}
                     </div>
+                    {watch.lastSnapshot ? (
+                      <div className="mt-0.5 truncate text-[10.5px] text-ink-3" title="最近一次巡检快照">
+                        快照：
+                        <span className="num text-ink-2">{watch.lastSnapshot.count ?? '—'}</span> 命中
+                        {watch.lastSnapshot.at ? ` · ${relTime(watch.lastSnapshot.at)}` : ''}
+                        {watch.lastSnapshot.topTitles && watch.lastSnapshot.topTitles.length > 0
+                          ? ` · Top：${watch.lastSnapshot.topTitles.slice(0, 2).join(' / ')}`
+                          : ''}
+                      </div>
+                    ) : null}
                   </div>
 
                   {trend && trend.history.length > 1 ? <Sparkline history={trend.history} /> : null}
